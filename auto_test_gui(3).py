@@ -63,7 +63,7 @@ class AutoTestGUI:
         
         self.root = tk.Tk()
         self.root.title("自动测试工具")
-        self.root.geometry("1000x600")
+        self.root.geometry("900x600")
         
         # 配置主窗口网格布局
         self.root.grid_rowconfigure(0, weight=1)  # 让主框架占据所有可用空间
@@ -343,8 +343,7 @@ class AutoTestGUI:
         ttk.Button(left_buttons, text="设为循环组", command=self.insert_loop_group).pack(side=tk.LEFT, padx=1)
         ttk.Button(left_buttons, text="输入循环", command=self.insert_input_loop).pack(side=tk.LEFT, padx=1)
         ttk.Button(left_buttons, text="遍历输入", command=self.insert_traverse_input).pack(side=tk.LEFT, padx=1)
-        ttk.Button(left_buttons, text="输入", command=self.insert_input_action).pack(side=tk.LEFT, padx=1)
-        
+
         # 右侧按钮组
         right_buttons = ttk.Frame(bottom_frame)
         right_buttons.pack(side=tk.RIGHT, padx=5)
@@ -453,26 +452,34 @@ class AutoTestGUI:
         except Exception:
             return False
 
+    def is_in_any_dialog(self, x, y):
+        """检查坐标是否在任何对话框内"""
+        try:
+            # 遍历所有Toplevel窗口
+            for widget in self.root.winfo_children():
+                if isinstance(widget, tk.Toplevel):
+                    if widget.winfo_viewable():  # 如果窗口可见
+                        dialog_x = widget.winfo_rootx()
+                        dialog_y = widget.winfo_rooty()
+                        dialog_width = widget.winfo_width()
+                        dialog_height = widget.winfo_height()
+
+                        if (dialog_x <= x <= dialog_x + dialog_width and
+                            dialog_y <= y <= dialog_y + dialog_height):
+                            return True
+            return False
+        except Exception:
+            return False
+
     def on_click(self, x, y, button, pressed):
         if not pressed:  # 只在释放时记录
             # 如果正在对话框操作中，不记录
             if self.in_dialog_operation:
                 return
 
-            # 检查是否在任何对话框内（不记录）
-            if self.is_in_any_dialog(x, y):
+            # 检查是否在工具窗口内或任何对话框内（不记录）
+            if self.is_in_window(x, y) or self.is_in_any_dialog(x, y):
                 return
-
-            # 检查是否在工具窗口内
-            if self.is_in_window(x, y):
-                # 检查是否在UI元素（按钮）内
-                if self.is_in_ui_element(x, y):
-                    # 在按钮内点击，录制这个动作（允许录制按钮点击）
-                    # 继续执行下面的录制逻辑
-                    pass
-                else:
-                    # 在窗口内但不在按钮上，不录制
-                    return
 
             current_time = time.time() - self.record_start_time  # 使用相对时间
             # 检测双击（使用距离阈值，避免精确坐标匹配问题）
@@ -513,17 +520,10 @@ class AutoTestGUI:
 
     def on_scroll(self, x, y, dx, dy):
         if self.is_recording and not self.in_dialog_operation:
-            # 检查是否在任何对话框内（不记录）
-            if self.is_in_any_dialog(x, y):
+            # 检查是否在工具窗口内或任何对话框内（不记录）
+            if self.is_in_window(x, y) or self.is_in_any_dialog(x, y):
                 return
 
-            # 检查是否在工具窗口内
-            if self.is_in_window(x, y):
-                # 检查是否在UI元素（按钮）内
-                if not self.is_in_ui_element(x, y):
-                    # 在窗口内但不在按钮上，不录制
-                    return
-                
             current_time = time.time() - self.record_start_time
             # 防止滚轮事件记录过于频繁
             if current_time - self.last_scroll_time >= self.scroll_threshold:
@@ -542,6 +542,9 @@ class AutoTestGUI:
     def on_key_down(self, key):
         try:
             if self.is_recording and not self.in_dialog_operation:
+                # 如果延时spinbox正在编辑，不记录键盘事件
+                if self.active_spinbox_item is not None:
+                    return
                 key_str = self.convert_key_name(key)
                 self.pressed_keys.add(key_str)
         except AttributeError:
@@ -550,6 +553,9 @@ class AutoTestGUI:
     def on_key_up(self, key):
         try:
             if self.is_recording and not self.in_dialog_operation:
+                # 如果延时spinbox正在编辑，不记录键盘事件
+                if self.active_spinbox_item is not None:
+                    return
                 current_time = time.time() - self.record_start_time
                 key_str = self.convert_key_name(key)
                 
@@ -1323,7 +1329,11 @@ class AutoTestGUI:
                             start = action.get('start', 0)
                             step = action.get('step', 1)
                             value = start + step * loop
-                        else:
+                            template = action.get('template', 'text{n}')
+                            text_to_input = template.replace('{n}', str(value))
+                        elif traverse_type == 'fixed_text':
+                            value = action.get('fixed_text', '')
+                        else:  # list
                             traverse_values = action.get('traverse_values', [])
                             if traverse_values and loop < len(traverse_values):
                                 value = traverse_values[loop]
@@ -1338,8 +1348,12 @@ class AutoTestGUI:
                                 pyautogui.hotkey('ctrl', 'a')
                                 time.sleep(0.05)
                                 pyautogui.press('backspace')
-                            pyautogui.write(str(value), interval=0.05)
-                            self.update_playback_info(f"遍历输入: {value}")
+                            if traverse_type == 'sequence':
+                                pyautogui.write(text_to_input, interval=0.05)
+                                self.update_playback_info(f"遍历输入: {text_to_input}")
+                            else:
+                                pyautogui.write(str(value), interval=0.05)
+                                self.update_playback_info(f"遍历输入: {value}")
                         else:
                             self.update_playback_info(f"遍历输入: 无可用值(循环{loop+1}超过列表长度)")
 
@@ -1526,11 +1540,11 @@ class AutoTestGUI:
     def _describe_action(self, action):
         action_type = action['type']
         if action_type == 'random_delay':
-            return f"随机延时 ({action.get('min_delay', 0):.3f}-{action.get('max_delay', 0):.3f}s)"
+            return f"随机延时 ({action.get('min_delay', 0):.1f}-{action.get('max_delay', 0):.1f}s)"
         if action_type == 'multiply_delay':
-            return f"倍数延时 (基数: {action.get('base_delay', 0):.3f}s)"
+            return f"倍数延时 (基数: {action.get('base_delay', 0):.1f}s)"
         if action_type == 'arithmetic_delay':
-            return f"等差延时 (起始: {action.get('start_delay', 0):.3f}s, 步距: {action.get('step_delay', 0):.3f}s)"
+            return f"等差延时 (起始: {action.get('start_delay', 0):.1f}s, 步距: {action.get('step_delay', 0):.1f}s)"
         if action_type == 'loop_group':
             loop_count = action.get('loop_count', 1)
             interval_params = action.get('loop_interval', {})
@@ -1594,10 +1608,14 @@ class AutoTestGUI:
             y = action.get('y', 0)
             if traverse_type == 'list':
                 return f"遍历输入[列表] ({len(values)}项) at ({x}, {y})"
+            elif traverse_type == 'fixed_text':
+                fixed_text = action.get('fixed_text', '')
+                return f"遍历输入[固定文本] ({fixed_text}) at ({x}, {y})"
             else:
                 start = action.get('start', 0)
                 step = action.get('step', 1)
-                return f"遍历输入[序列] (起始{start},步距{step}) at ({x}, {y})"
+                template = action.get('template', 'text{n}')
+                return f"遍历输入[序列] ({template}) at ({x}, {y})"
         if action_type == 'move':
             return f"移动到 ({action['x']}, {action['y']})"
         if action_type == 'doubleclick':
@@ -1622,17 +1640,17 @@ class AutoTestGUI:
             naming = "时间戳" if action.get('naming', 'timestamp') == 'timestamp' else "递增序号"
             return f"截屏: {action.get('filename', 'screenshot')} ({naming})"
         if action_type == 'delay':
-            return f"延时 ({action.get('delay', 1.0):.3f}s)"
+            return f"延时 ({action.get('delay', 1.0):.1f}s)"
         return action_type
 
     def _format_delay_text(self, index):
         action = self.actions[index]
         if action['type'] == 'random_delay':
-            return f"{action.get('min_delay', 0):.3f}-{action.get('max_delay', 0):.3f}s"
+            return f"{action.get('min_delay', 0):.1f}-{action.get('max_delay', 0):.1f}s"
         if action['type'] == 'multiply_delay':
-            return f"Base: {action.get('base_delay', 0):.3f}s"
+            return f"Base: {action.get('base_delay', 0):.1f}s"
         if action['type'] == 'arithmetic_delay':
-            return f"Start: {action.get('start_delay', 0):.3f}s Step: {action.get('step_delay', 0):.3f}s"
+            return f"Start: {action.get('start_delay', 0):.1f}s Step: {action.get('step_delay', 0):.1f}s"
         if action['type'] == 'loop_group':
             return f"循环{action.get('loop_count', 1)}次"
         if action['type'] == 'input_loop':
@@ -1651,11 +1669,11 @@ class AutoTestGUI:
             count = abs(int((end - start) / step)) + 1 if step != 0 else 0
             return f"{count}次循环"
         if action['type'] == 'screenshot':
-            return f"{action.get('delay', 0):.3f}s"
+            return f"{action.get('delay', 0):.1f}s"
         if action['type'] == 'delay':
-            return f"{action.get('delay', 1.0):.3f}s"
+            return f"{action.get('delay', 1.0):.1f}s"
         relative_delay = self._get_relative_delay(index)
-        return f"{relative_delay:.3f}s" if relative_delay is not None else "-"
+        return f"{relative_delay:.1f}s" if relative_delay is not None else "-"
 
     def _get_relative_delay(self, index):
         """获取相对延时，使用缓存优化性能"""
@@ -2181,7 +2199,7 @@ class AutoTestGUI:
             current_value = float(action.get('interval', 0.5))
         elif action_type == 'variable_input':
             current_value = float(action.get('time', 0.0))
-        elif action_type in ['move', 'click', 'doubleclick', 'input']:
+        elif action_type in ['move', 'click', 'doubleclick', 'input', 'traverse_input', 'keyboard', 'scroll']:
             if index is None:
                 return
             relative = self._get_relative_delay(index)
@@ -2313,7 +2331,7 @@ class AutoTestGUI:
                 action['interval'] = new_value
             elif action_type == 'variable_input':
                 action['time'] = new_value
-            elif action_type in ['move', 'click', 'doubleclick']:
+            elif action_type in ['move', 'click', 'doubleclick', 'input', 'traverse_input', 'keyboard', 'scroll']:
                 if item_id.startswith('loop_') or item_id.startswith('input_loop_'):
                     action['time'] = new_value
                 elif index is not None:
@@ -2623,7 +2641,7 @@ class AutoTestGUI:
 
         dialog = tk.Toplevel(self.root)
         dialog.title("遍历输入")
-        dialog.geometry("500x400")
+        dialog.geometry("500x340")
         dialog.transient(self.root)
         dialog.attributes('-topmost', True)
         dialog.grab_set()
@@ -2639,9 +2657,11 @@ class AutoTestGUI:
 
         # 遍历类型选择
         ttk.Label(main_frame, text="遍历类型:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
-        type_var = tk.StringVar(value="list")
+        type_var = tk.StringVar(value="fixed_text")
         type_frame = ttk.Frame(main_frame)
         type_frame.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        ttk.Radiobutton(type_frame, text="固定文本", variable=type_var, value="fixed_text",
+                       command=lambda: update_type_ui("fixed_text")).pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(type_frame, text="列表遍历", variable=type_var, value="list",
                        command=lambda: update_type_ui("list")).pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(type_frame, text="序列", variable=type_var, value="sequence",
@@ -2664,36 +2684,54 @@ class AutoTestGUI:
 
         # 参数框架（动态切换）
         params_frame = ttk.Frame(main_frame)
-        params_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=10)
+        params_frame.grid(row=2, column=0, columnspan=2, sticky="w", pady=10)
 
         # 列表遍历参数
         list_frame = ttk.Frame(params_frame)
-        ttk.Label(list_frame, text="遍历列表:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
-        list_text = tk.Text(list_frame, width=30, height=8)
-        list_text.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        list_row1 = ttk.Frame(list_frame)
+        list_row1.pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(list_row1, text="遍历列表:").pack(side=tk.LEFT, padx=2)
+        list_text = tk.Text(list_row1, width=25, height=6)
+        list_text.pack(side=tk.LEFT, padx=2)
         list_text.insert(tk.END, "value1\nvalue2\nvalue3\nvalue4\nvalue5")
-        ttk.Label(list_frame, text="(每行一个值，列表长度决定遍历次数)").grid(row=1, column=1, padx=5, pady=2, sticky="w")
+        ttk.Label(list_frame, text="(每行一个值)").pack(side=tk.TOP, padx=2, pady=(2, 0))
 
         # 序列参数
         seq_frame = ttk.Frame(params_frame)
-        ttk.Label(seq_frame, text="起始值:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        seq_row1 = ttk.Frame(seq_frame)
+        seq_row1.pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(seq_row1, text="起始值:").pack(side=tk.LEFT, padx=2)
         start_var = tk.DoubleVar(value=0)
-        ttk.Entry(seq_frame, width=10, textvariable=start_var).grid(row=0, column=1, padx=5, pady=5, sticky="w")
-        ttk.Label(seq_frame, text="步距:").grid(row=0, column=2, padx=5, pady=5, sticky="e")
+        ttk.Entry(seq_row1, width=8, textvariable=start_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row1, text="步距:").pack(side=tk.LEFT, padx=2)
         step_var = tk.DoubleVar(value=1)
-        ttk.Entry(seq_frame, width=10, textvariable=step_var).grid(row=0, column=3, padx=5, pady=5, sticky="w")
-        ttk.Label(seq_frame, text="(序列由主页循环次数决定)").grid(row=1, column=1, columnspan=4, padx=5, pady=2, sticky="w")
+        ttk.Entry(seq_row1, width=8, textvariable=step_var).pack(side=tk.LEFT, padx=2)
+        seq_row2 = ttk.Frame(seq_frame)
+        seq_row2.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
+        ttk.Label(seq_row2, text="模板:").pack(side=tk.LEFT, padx=2)
+        seq_template_var = tk.StringVar(value="text{n}text")
+        ttk.Entry(seq_row2, width=15, textvariable=seq_template_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row2, text="(用{n}替换)").pack(side=tk.LEFT, padx=2)
+
+        # 固定文本参数
+        fixed_text_frame = ttk.Frame(params_frame)
+        ttk.Label(fixed_text_frame, text="输入文本:").pack(side=tk.LEFT, padx=2)
+        fixed_text_var = tk.StringVar(value="text1")
+        ttk.Entry(fixed_text_frame, width=25, textvariable=fixed_text_var).pack(side=tk.LEFT, padx=2)
 
         def update_type_ui(mode):
             list_frame.grid_forget()
             seq_frame.grid_forget()
+            fixed_text_frame.grid_forget()
             if mode == "list":
-                list_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
-            else:
-                seq_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
+                list_frame.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+            elif mode == "sequence":
+                seq_frame.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+            else:  # fixed_text
+                fixed_text_frame.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
 
         # 初始化UI
-        update_type_ui("list")
+        update_type_ui("fixed_text")
 
         # 录制按钮功能
         def start_record():
@@ -2732,14 +2770,20 @@ class AutoTestGUI:
                 values = []
                 start = 0
                 step = 1
+                fixed_text = ""
                 if traverse_type == "list":
                     text_content = list_text.get("1.0", tk.END).strip()
                     if not text_content:
                         raise ValueError("遍历列表不能为空")
                     values = [line.strip() for line in text_content.split('\n') if line.strip()]
-                else:  # sequence
+                elif traverse_type == "sequence":
                     start = start_var.get()
                     step = step_var.get()
+                    seq_template = seq_template_var.get()
+                else:  # fixed_text
+                    fixed_text = fixed_text_var.get()
+                    if not fixed_text:
+                        raise ValueError("输入文本不能为空")
 
                 if not values and traverse_type == "list":
                     raise ValueError("遍历列表不能为空")
@@ -2753,6 +2797,8 @@ class AutoTestGUI:
                     'traverse_values': values if traverse_type == "list" else [],
                     'start': start if traverse_type == "sequence" else None,
                     'step': step if traverse_type == "sequence" else None,
+                    'template': seq_template if traverse_type == "sequence" else None,
+                    'fixed_text': fixed_text if traverse_type == "fixed_text" else None,
                     'remark': ''
                 }
 
@@ -2800,8 +2846,8 @@ class AutoTestGUI:
         dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
 
         # 延时类型选择
-        type_var = tk.StringVar(value="random")
-        
+        type_var = tk.StringVar(value="fixed")
+
         # 延时设置框架
         frame = ttk.Frame(dialog, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
@@ -2810,12 +2856,22 @@ class AutoTestGUI:
         ttk.Label(frame, text="延时类型:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
         type_frame = ttk.Frame(frame)
         type_frame.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        ttk.Radiobutton(type_frame, text="固定延时", variable=type_var, value="fixed",
+                       command=lambda: update_ui("fixed")).pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(type_frame, text="随机范围", variable=type_var, value="random",
                        command=lambda: update_ui("random")).pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(type_frame, text="倍数增长", variable=type_var, value="multiply",
                        command=lambda: update_ui("multiply")).pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(type_frame, text="等差递增", variable=type_var, value="arithmetic",
                        command=lambda: update_ui("arithmetic")).pack(side=tk.LEFT, padx=2)
+
+        # 固定延时参数
+        fixed_frame = ttk.Frame(frame)
+        fixed_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
+
+        ttk.Label(fixed_frame, text="延时(秒):").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        fixed_delay_var = tk.DoubleVar(value=1.0)
+        ttk.Entry(fixed_frame, width=10, textvariable=fixed_delay_var).grid(row=0, column=1, padx=5, pady=5, sticky="w")
 
         # 随机延时参数
         random_frame = ttk.Frame(frame)
@@ -2851,27 +2907,45 @@ class AutoTestGUI:
         ttk.Entry(arithmetic_frame, width=10, textvariable=arithmetic_step_var).grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
         def update_ui(delay_type):
-            if delay_type == "random":
+            if delay_type == "fixed":
+                fixed_frame.grid()
+                random_frame.grid_remove()
+                exp_frame.grid_remove()
+                arithmetic_frame.grid_remove()
+            elif delay_type == "random":
+                fixed_frame.grid_remove()
                 random_frame.grid()
                 exp_frame.grid_remove()
                 arithmetic_frame.grid_remove()
             elif delay_type == "multiply":
+                fixed_frame.grid_remove()
                 random_frame.grid_remove()
                 exp_frame.grid()
                 arithmetic_frame.grid_remove()
             else:  # arithmetic
+                fixed_frame.grid_remove()
                 random_frame.grid_remove()
                 exp_frame.grid_remove()
                 arithmetic_frame.grid()
 
         # 初始化UI状态
-        update_ui("random")
+        update_ui("fixed")
 
         def confirm():
             try:
                 delay_type = type_var.get()
 
-                if delay_type == "random":
+                if delay_type == "fixed":
+                    delay = float(fixed_delay_var.get())
+                    if delay < 0:
+                        raise ValueError("延时不能为负数")
+
+                    action = {
+                        'type': 'delay',
+                        'delay': delay,
+                        'time': 0
+                    }
+                elif delay_type == "random":
                     min_delay = float(min_entry.get())
                     max_delay = float(max_entry.get())
                     if (min_delay < 0 or max_delay < min_delay):
@@ -3377,9 +3451,9 @@ class AutoTestGUI:
                 desc = self._describe_action(act)
                 act_type = act.get('type')
                 if act_type == 'delay':
-                    delay_text = f"{act.get('delay', 1.0):.3f}s"
+                    delay_text = f"{act.get('delay', 1.0):.1f}s"
                 else:
-                    delay_text = f"{act.get('time', 0):.3f}s"
+                    delay_text = f"{act.get('time', 0):.1f}s"
                 remark_text = act.get('remark', '')
                 loop_action_tree.insert("", tk.END, iid=str(idx), values=(desc, delay_text, remark_text))
 
@@ -3415,9 +3489,9 @@ class AutoTestGUI:
                 x, y, width, height = bbox
                 act_type = action.get('type')
                 if act_type == 'delay':
-                    delay_var_in_loop[0].set(f"{action.get('delay', 1.0):.3f}")
+                    delay_var_in_loop[0].set(f"{action.get('delay', 1.0):.1f}")
                 else:
-                    delay_var_in_loop[0].set(f"{action.get('time', 0):.3f}")
+                    delay_var_in_loop[0].set(f"{action.get('time', 0):.1f}")
                 delay_entry_in_loop[0] = ttk.Entry(loop_action_tree, textvariable=delay_var_in_loop[0], width=10)
                 delay_entry_in_loop[0].place(x=x, y=y, width=width, height=height)
                 delay_entry_in_loop[0].focus_set()
@@ -3546,9 +3620,9 @@ class AutoTestGUI:
                 x, y, width, height = bbox
                 act_type = action.get('type')
                 if act_type == 'delay':
-                    delay_var_in_loop[0].set(f"{action.get('delay', 1.0):.3f}")
+                    delay_var_in_loop[0].set(f"{action.get('delay', 1.0):.1f}")
                 else:
-                    delay_var_in_loop[0].set(f"{action.get('time', 0):.3f}")
+                    delay_var_in_loop[0].set(f"{action.get('time', 0):.1f}")
                 delay_entry_in_loop[0] = ttk.Entry(loop_action_tree, textvariable=delay_var_in_loop[0], width=10)
                 delay_entry_in_loop[0].place(x=x, y=y, width=width, height=height)
                 delay_entry_in_loop[0].focus_set()
@@ -3844,9 +3918,9 @@ class AutoTestGUI:
                     desc = self._describe_action(act)
                     act_type = act.get('type')
                     if act_type == 'delay':
-                        delay_text = f"{act.get('delay', 1.0):.3f}s"
+                        delay_text = f"{act.get('delay', 1.0):.1f}s"
                     else:
-                        delay_text = f"{act.get('time', 0):.3f}s"
+                        delay_text = f"{act.get('time', 0):.1f}s"
                     remark_text = act.get('remark', '')
                     loop_action_tree.insert("", tk.END, iid=str(idx), values=(desc, delay_text, remark_text))
                 if loop_actions:
@@ -5668,7 +5742,7 @@ class AutoTestGUI:
                 action = self.actions[index]
 
             # 检查动作是否支持时间修改
-            if action['type'] not in ['move', 'click', 'doubleclick', 'random_delay', 'multiply_delay', 'arithmetic_delay', 'screenshot', 'loop_group', 'numeric_loop', 'variable_input']:
+            if action['type'] not in ['move', 'click', 'doubleclick', 'delay', 'random_delay', 'multiply_delay', 'arithmetic_delay', 'screenshot', 'loop_group', 'numeric_loop', 'variable_input']:
                 messagebox.showinfo("提示", "该动作不支持修改时间")
                 self.in_dialog_operation = False
                 return
@@ -5693,20 +5767,31 @@ class AutoTestGUI:
             action_type = action['type']
 
             # 延时动作使用完整的延时类型选择界面
-            if action_type in ['random_delay', 'multiply_delay', 'arithmetic_delay']:
-                # 延时类型选择
-                type_var = tk.StringVar(value=action_type)
+            if action_type in ['delay', 'random_delay', 'multiply_delay', 'arithmetic_delay']:
+                # 延时类型选择 - 将动作类型映射到UI类型
+                ui_type = "fixed" if action_type == "delay" else action_type
+                type_var = tk.StringVar(value=ui_type)
 
                 # 类型选择
                 ttk.Label(frame, text="延时类型:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
                 type_frame = ttk.Frame(frame)
                 type_frame.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+                ttk.Radiobutton(type_frame, text="固定延时", variable=type_var, value="fixed",
+                               command=lambda: update_ui("fixed")).pack(side=tk.LEFT, padx=2)
                 ttk.Radiobutton(type_frame, text="随机范围", variable=type_var, value="random",
                                command=lambda: update_ui("random")).pack(side=tk.LEFT, padx=2)
                 ttk.Radiobutton(type_frame, text="倍数增长", variable=type_var, value="multiply",
                                command=lambda: update_ui("multiply")).pack(side=tk.LEFT, padx=2)
                 ttk.Radiobutton(type_frame, text="等差递增", variable=type_var, value="arithmetic",
                                command=lambda: update_ui("arithmetic")).pack(side=tk.LEFT, padx=2)
+
+                # 固定延时参数
+                fixed_frame = ttk.Frame(frame)
+                fixed_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
+
+                ttk.Label(fixed_frame, text="延时(秒):").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+                fixed_var = tk.DoubleVar(value=action.get('delay', 1.0))
+                ttk.Entry(fixed_frame, width=10, textvariable=fixed_var).grid(row=0, column=1, padx=5, pady=5, sticky="w")
 
                 # 随机延时参数
                 random_frame = ttk.Frame(frame)
@@ -5745,27 +5830,42 @@ class AutoTestGUI:
                 ttk.Entry(arithmetic_frame, width=10, textvariable=arithmetic_step_var).grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
                 def update_ui(delay_type):
-                    if delay_type == "random":
+                    if delay_type in ("fixed", "delay"):
+                        fixed_frame.grid()
+                        random_frame.grid_remove()
+                        exp_frame.grid_remove()
+                        arithmetic_frame.grid_remove()
+                    elif delay_type == "random":
+                        fixed_frame.grid_remove()
                         random_frame.grid()
                         exp_frame.grid_remove()
                         arithmetic_frame.grid_remove()
                     elif delay_type == "multiply":
+                        fixed_frame.grid_remove()
                         random_frame.grid_remove()
                         exp_frame.grid()
                         arithmetic_frame.grid_remove()
                     else:  # arithmetic
+                        fixed_frame.grid_remove()
                         random_frame.grid_remove()
                         exp_frame.grid_remove()
                         arithmetic_frame.grid()
 
-                # 初始化UI状态
-                update_ui(action_type)
+                # 初始化UI状态 - 将动作类型映射到UI类型
+                ui_type = "fixed" if action_type == "delay" else action_type
+                update_ui(ui_type)
 
                 def confirm():
                     try:
                         delay_type = type_var.get()
 
-                        if delay_type == "random":
+                        if delay_type == "fixed":
+                            delay = fixed_var.get()
+                            if delay < 0:
+                                raise ValueError("延时不能为负数")
+                            action['type'] = 'delay'
+                            action['delay'] = delay
+                        elif delay_type == "random":
                             min_delay = min_var.get()
                             max_delay = max_var.get()
                             if min_delay < 0 or max_delay < min_delay:
