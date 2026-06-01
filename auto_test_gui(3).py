@@ -78,6 +78,7 @@ class AutoTestGUI:
         self.is_playing = False
         self.in_dialog_operation = False  # 在对话框操作时不记录
         self.test_index = 0
+        self.test_index_lock = Lock()  # 保护test_index的锁
         self.mouse_listener = None
         self.keyboard_listener = None
         self.last_click_time = 0
@@ -118,6 +119,11 @@ class AutoTestGUI:
         self.playback_info = []  # 存储回放信息
         self._relative_delay_cache = {}  # 缓存相对延时计算结果
         self._relative_delay_valid = False  # 缓存是否有效
+        self._listener_stop_scheduled = False  # 标记是否已计划停止监听器
+        self.screenshot_dir_var = tk.StringVar(value=screenshot_dir)
+        self.screenshot_name_var = tk.StringVar(value="screenshot")
+        self.screenshot_delay_var = tk.DoubleVar(value=0.0)
+        self.screenshot_naming_var = tk.StringVar(value="timestamp")
 
         self.status_var = tk.StringVar(value="就绪")
 
@@ -236,8 +242,10 @@ class AutoTestGUI:
 
         # 次数
         ttk.Label(loop_frame, text="次数:").pack(side=tk.LEFT, padx=2)
-        self.loop_entry = ttk.Entry(loop_frame, width=4, textvariable=self.loop_count)
-        self.loop_entry.pack(side=tk.LEFT, padx=2)
+        self.loop_count = tk.IntVar(value=1)  # 默认循环1次
+        self.loop_spinbox = ttk.Spinbox(loop_frame, from_=1, to=9999, width=4, textvariable=self.loop_count)
+        self.loop_spinbox.pack(side=tk.LEFT, padx=2)
+        self._update_loop_count_max()
 
         # 间隔
         ttk.Label(loop_frame, text="间隔:").pack(side=tk.LEFT, padx=2)
@@ -280,7 +288,7 @@ class AutoTestGUI:
         self.action_tree.heading("delay", text="延时(秒)")
         self.action_tree.heading("remark", text="备注")
         self.action_tree.column("action", anchor="w", width=250, stretch=True)
-        self.action_tree.column("delay", anchor="center", width=70, stretch=False)
+        self.action_tree.column("delay", anchor="center", width=85, stretch=False)
         self.action_tree.column("remark", anchor="w", width=120, stretch=True)
         self.action_tree.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         self.action_tree.bind("<Double-1>", self.on_tree_double_click)
@@ -340,9 +348,9 @@ class AutoTestGUI:
         ttk.Button(left_buttons, text="插入点击", command=self.insert_click_action).pack(side=tk.LEFT, padx=1)
         ttk.Button(left_buttons, text="删除动作", command=self.delete_selected).pack(side=tk.LEFT, padx=1)
         ttk.Button(left_buttons, text="插入延时", command=self.insert_random_delay).pack(side=tk.LEFT, padx=1)
+        ttk.Button(left_buttons, text="添加截屏", command=self.add_screenshot_action).pack(side=tk.LEFT, padx=1)
+        ttk.Button(left_buttons, text="输入", command=self.insert_traverse_input).pack(side=tk.LEFT, padx=1)
         ttk.Button(left_buttons, text="设为循环组", command=self.insert_loop_group).pack(side=tk.LEFT, padx=1)
-        ttk.Button(left_buttons, text="输入循环", command=self.insert_input_loop).pack(side=tk.LEFT, padx=1)
-        ttk.Button(left_buttons, text="遍历输入", command=self.insert_traverse_input).pack(side=tk.LEFT, padx=1)
 
         # 右侧按钮组
         right_buttons = ttk.Frame(bottom_frame)
@@ -356,41 +364,7 @@ class AutoTestGUI:
         self.shortcut_label = ttk.Label(self.root, text=self.shortcut_help, anchor="w", relief=tk.GROOVE)
         self.shortcut_label.grid(row=3, column=0, sticky="ew", padx=5, pady=2)
 
-        # 添加截屏设置框架（更紧凑的布局）
-        screenshot_frame = ttk.LabelFrame(main_frame, text="截屏设置")
-        screenshot_frame.grid(row=3, column=0, sticky="ew", pady=(0, 5))
-
-        # 第一行：目录
-        ttk.Label(screenshot_frame, text="目录:").grid(row=0, column=0, padx=3, pady=3, sticky="e")
-        self.screenshot_dir_var = tk.StringVar(value=screenshot_dir)
-        screenshot_dir_entry = ttk.Entry(screenshot_frame, textvariable=self.screenshot_dir_var, width=35)
-        screenshot_dir_entry.grid(row=0, column=1, padx=3, pady=3, sticky="w")
-
-        ttk.Button(screenshot_frame, text="选择", command=self.select_screenshot_dir).grid(row=0, column=2, padx=3, pady=3)
-
-        # 第二行：文件名和延时
-        ttk.Label(screenshot_frame, text="名称:").grid(row=1, column=0, padx=3, pady=3, sticky="e")
-        self.screenshot_name_var = tk.StringVar(value="screenshot")
-        screenshot_name_entry = ttk.Entry(screenshot_frame, textvariable=self.screenshot_name_var, width=15)
-        screenshot_name_entry.grid(row=1, column=1, padx=3, pady=3, sticky="w")
-
-        ttk.Label(screenshot_frame, text="延时:").grid(row=1, column=2, padx=3, pady=3, sticky="e")
-        self.screenshot_delay_var = tk.DoubleVar(value=0.0)
-        screenshot_delay_entry = ttk.Entry(screenshot_frame, textvariable=self.screenshot_delay_var, width=8)
-        screenshot_delay_entry.grid(row=1, column=3, padx=3, pady=3, sticky="w")
-
-        self.screenshot_naming_var = tk.StringVar(value="timestamp")
-        ttk.Radiobutton(screenshot_frame, text="时间戳", variable=self.screenshot_naming_var, value="timestamp").grid(row=2, column=0, padx=3, pady=3, sticky="w")
-        ttk.Radiobutton(screenshot_frame, text="序号", variable=self.screenshot_naming_var, value="increment").grid(row=2, column=1, padx=3, pady=3, sticky="w")
-
-        ttk.Button(screenshot_frame, text="添加截屏", command=self.add_screenshot_action).grid(row=2, column=2, padx=3, pady=3)
-
-    def select_screenshot_dir(self):
-        """选择截屏保存目录"""
-        dir_path = filedialog.askdirectory(initialdir=self.screenshot_dir_var.get(), title="选择截屏保存目录")
-        if dir_path:
-            self.screenshot_dir_var.set(dir_path)
-
+        
     def is_click_in_ui(self, x, y):
         """检查点击是否在UI元素上"""
         try:
@@ -763,21 +737,28 @@ class AutoTestGUI:
     def stop_recording(self):
         self.is_recording = False
 
-        # 停止并等待监听器
-        if self.mouse_listener:
-            try:
-                self.mouse_listener.stop()
-                # 给监听器一点时间来停止
-                time.sleep(0.1)
-            except Exception as e:
-                print(f"停止鼠标监听器失败: {e}")
-        if self.keyboard_listener:
-            try:
-                self.keyboard_listener.stop()
-                time.sleep(0.1)
-            except Exception as e:
-                print(f"停止键盘监听器失败: {e}")
+        # 如果从非主线程调用，使用root.after在主线程执行停止操作
+        if not self._listener_stop_scheduled:
+            self._listener_stop_scheduled = True
+            self.root.after(0, self._stop_listeners_internal)
+            self.root.after(0, self._finalize_recording_ui)
 
+    def _stop_listeners_internal(self):
+        """在主线程中安全地停止监听器"""
+        try:
+            if self.mouse_listener:
+                self.mouse_listener.stop()
+        except Exception as e:
+            print(f"停止鼠标监听器失败: {e}")
+        try:
+            if self.keyboard_listener:
+                self.keyboard_listener.stop()
+        except Exception as e:
+            print(f"停止键盘监听器失败: {e}")
+        self._listener_stop_scheduled = False
+
+    def _finalize_recording_ui(self):
+        """更新UI状态（在主线程执行）"""
         if self.recording_thread and self.recording_thread.is_alive():
             self.recording_thread.join(timeout=1.0)
 
@@ -818,7 +799,8 @@ class AutoTestGUI:
         self.is_playing = True
         self.play_btn.config(state='disabled')
         self.stop_btn.config(state='normal')
-        self.test_index+=1
+        with self.test_index_lock:
+            self.test_index+=1
         self.playback_thread = Thread(target=self.play_recorded_actions,args=(self.test_index,))
         self.playback_thread.start()
 
@@ -875,6 +857,20 @@ class AutoTestGUI:
         self.interval_entry.configure(state='disabled' if is_random else 'normal')
         self.status_var.set(f"使用{'随机' if is_random else '固定'}时间间隔")
 
+    def _update_loop_count_max(self):
+        """更新主界面循环次数的最大值，如果动作列表中有列表遍历类型的遍历输入"""
+        max_count = 9999
+        for action in self.actions:
+            # 只检查顶层动作，不检查循环组内的嵌套动作
+            if action.get('type') == 'traverse_input' and action.get('traverse_type') == 'list':
+                values = action.get('traverse_values', [])
+                if values:
+                    max_count = len(values)
+                    break
+        self.loop_spinbox.configure(to=max_count)
+        if self.loop_count.get() > max_count:
+            self.loop_count.set(max_count)
+
     def record_actions(self):
         """优化后的录制函数，确保弹窗出现时不停止录制"""
         self.record_start_time = time.time()
@@ -920,8 +916,13 @@ class AutoTestGUI:
         finally:
             pyautogui.FAILSAFE = True  # 恢复故障保护
 
-    def _execute_single_action(self, action):
-        """执行单个动作（用于循环组）"""
+    def _execute_single_action(self, action, loop_index=0):
+        """执行单个动作（用于循环组）
+
+        Args:
+            action: 动作字典
+            loop_index: 当前循环组的循环索引（从0开始），用于遍历输入等动作
+        """
         if not action:
             return
 
@@ -943,13 +944,19 @@ class AutoTestGUI:
         elif action_type == 'move':
             pyautogui.moveTo(action['x'], action['y'], duration=0.1)
         elif action_type == 'screenshot':
-            self.take_screenshot(delay=action.get('delay', 0))
+            self.take_screenshot(
+                delay=action.get('delay', 0),
+                directory=action.get('directory'),
+                filename=action.get('filename'),
+                naming=action.get('naming')
+            )
         elif action_type == 'random_delay':
             delay = random.uniform(action.get('min_delay', 0), action.get('max_delay', 0))
             time.sleep(delay)
         elif action_type == 'multiply_delay':
-            # 倍数延时：这里在循环组内不使用倍数，直接使用基数
-            delay = action.get('base_delay', 1.0)
+            # 倍数延时：使用基数 * (loop_index + 1)
+            base_delay = action.get('base_delay', 1.0)
+            delay = base_delay * (loop_index + 1)
             time.sleep(delay)
         elif action_type == 'arithmetic_delay':
             # 等差延时：这里在循环组内使用起始延时
@@ -965,17 +972,17 @@ class AutoTestGUI:
             if not nested_loop_actions:
                 return
 
-            for _ in range(nested_loop_count):
+            for nested_loop_index in range(nested_loop_count):
                 if not self.is_playing:
                     return
                 # 执行嵌套循环动作
                 for nested_action in nested_loop_actions:
                     if not self.is_playing:
                         return
-                    self._execute_single_action(nested_action)
+                    self._execute_single_action(nested_action, nested_loop_index)
 
                 # 嵌套循环间隔
-                if _ < nested_loop_count - 1:
+                if nested_loop_index < nested_loop_count - 1:
                     if interval_type == 'fixed':
                         wait_time = interval_params.get('value', 0)
                     elif interval_type == 'range':
@@ -993,6 +1000,11 @@ class AutoTestGUI:
             target_y = action.get('y')
             value = action.get('value', '')
             clear_text = action.get('clear_text', True)
+
+            # 处理相对延时
+            action_time = action.get('time', 0)
+            if action_time > 0:
+                time.sleep(action_time)
 
             if target_x is not None and target_y is not None:
                 pyautogui.moveTo(target_x, target_y, duration=0.1)
@@ -1024,6 +1036,47 @@ class AutoTestGUI:
 
             if input_text:
                 pyautogui.write(input_text, interval=0.05)
+
+        elif action_type == 'traverse_input':
+            # 遍历输入：根据循环索引使用不同的值
+            traverse_type = action.get('traverse_type', 'list')
+            target_x = action.get('x')
+            target_y = action.get('y')
+
+            # 计算当前值
+            if traverse_type == 'sequence':
+                start = action.get('start', 0)
+                step = action.get('step', 1)
+                value = start + step * loop_index
+                template = action.get('template', 'text{n}')
+                text_to_input = template.replace('{n}', str(value))
+            elif traverse_type == 'fixed_text':
+                text_to_input = action.get('fixed_text', '')
+            else:  # list
+                traverse_values = action.get('traverse_values', [])
+                if traverse_values:
+                    # 如果索引超出列表长度，使用最后一个值
+                    if loop_index < len(traverse_values):
+                        text_to_input = traverse_values[loop_index]
+                    else:
+                        text_to_input = traverse_values[-1]
+                else:
+                    text_to_input = ''
+
+            # 执行输入
+            if target_x is not None and target_y is not None:
+                pyautogui.moveTo(target_x, target_y, duration=0.1)
+                pyautogui.click()
+                time.sleep(0.05)
+                pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.05)
+                pyautogui.press('backspace')
+
+            if text_to_input:
+                if traverse_type == 'sequence':
+                    pyautogui.write(text_to_input, interval=0.05)
+                else:
+                    pyautogui.write(str(text_to_input), interval=0.05)
 
         elif action_type == 'input_loop':
             # 输入循环：执行输入并执行循环内动作
@@ -1110,6 +1163,9 @@ class AutoTestGUI:
                     time.sleep(actual_interval)
 
     def play_recorded_actions(self, index):
+        # 禁用 pyautogui 的故障保护
+        pyautogui.FAILSAFE = False
+
         # 清空回放信息列表（使用root.after确保线程安全）
         self.root.after(0, lambda: self.playback_list.delete(0, tk.END))
         self.root.after(0, lambda: self.status_var.set("正在执行..."))
@@ -1129,6 +1185,9 @@ class AutoTestGUI:
             if self.interval_random.get():
                 min_interval = max(0, self.interval_min.get())
                 max_interval = max(min_interval, self.interval_max.get())
+                # 确保max不小于min
+                if max_interval < min_interval:
+                    max_interval = min_interval
             else:
                 interval = max(0, self.loop_interval.get())
 
@@ -1138,18 +1197,27 @@ class AutoTestGUI:
                     break
                 self.update_playback_info(f"开始执行第 {loop + 1}/{loops} 轮")
 
+                # 循环间隔延时
+                if loop > 0 and not self.interval_random.get():
+                    interval = max(0, self.loop_interval.get())
+                    if interval > 0:
+                        time.sleep(interval)
+
                 last_action_time = 0  # 初始化上一个动作的时间
 
                 for i, action in enumerate(self.actions):
                     # 检查是否按下Ctrl+Q（兼容性处理，防止遗漏）
                     if not self.is_playing:
                         return
-                    if self.test_index != index:
-                        return
+                    with self.test_index_lock:
+                        if self.test_index != index:
+                            return
                     # 检查鼠标是否在屏幕左上角
                     current_position = pyautogui.position()
                     if current_position[0] <= 10 and current_position[1] <= 10:
-                        self.stop_playback()
+                        pyautogui.FAILSAFE = True
+                        self.is_playing = False
+                        self.root.after(0, lambda: self.status_var.set("回放已中止（FAILSAFE触发）"))
                         return
 
                     # 计算需要等待的时间
@@ -1205,7 +1273,12 @@ class AutoTestGUI:
                         self.update_playback_info(f"等待等差延时(第{loop+1}轮): {delay:.1f}秒")
                         time.sleep(delay)
                     elif action['type'] == 'screenshot':
-                        self.take_screenshot(delay=action.get('delay', 0))
+                        self.take_screenshot(
+                            delay=action.get('delay', 0),
+                            directory=action.get('directory'),
+                            filename=action.get('filename'),
+                            naming=action.get('naming')
+                        )
                     elif action['type'] == 'loop_group':
                         # 循环组：执行选中动作N次
                         loop_count = action.get('loop_count', 1)
@@ -1217,17 +1290,17 @@ class AutoTestGUI:
                             self.update_playback_info("循环组: 无循环动作")
                             continue
 
-                        for _ in range(loop_count):
+                        for loop_idx in range(loop_count):
                             if not self.is_playing:
                                 return
                             # 执行循环动作
                             for loop_action in loop_actions:
                                 if not self.is_playing:
                                     return
-                                self._execute_single_action(loop_action)
+                                self._execute_single_action(loop_action, loop_idx)
 
                             # 循环间隔
-                            if _ < loop_count - 1:
+                            if loop_idx < loop_count - 1:
                                 if interval_type == 'fixed':
                                     wait_time = interval_params.get('value', 0)
                                 elif interval_type == 'range':
@@ -1335,8 +1408,12 @@ class AutoTestGUI:
                             value = action.get('fixed_text', '')
                         else:  # list
                             traverse_values = action.get('traverse_values', [])
-                            if traverse_values and loop < len(traverse_values):
-                                value = traverse_values[loop]
+                            if traverse_values:
+                                # 如果索引超出列表长度，使用最后一个值
+                                if loop < len(traverse_values):
+                                    value = traverse_values[loop]
+                                else:
+                                    value = traverse_values[-1]  # 使用最后一个值
                             else:
                                 value = None
 
@@ -1374,10 +1451,12 @@ class AutoTestGUI:
             if self.status_var.get() != "回放已中止":
                 self.status_var.set("执行完成")
             self.update_playback_info("播放完成")
+            pyautogui.FAILSAFE = True  # 恢复故障保护
 
         except Exception as e:
             print(f"回放错误: {e}")
             self.root.after(0, lambda: self.status_var.set("回放出错"))
+            pyautogui.FAILSAFE = True  # 恢复故障保护
             return
     
     def update_playback_info(self, text):
@@ -1488,6 +1567,9 @@ class AutoTestGUI:
         has_loop_group = any(a.get('type') in ['loop_group', 'input_loop'] for a in self.actions)
         if not has_loop_group:
             self._restore_selection(scroll_to_end, select_index, previous_selection)
+
+        # 更新主界面循环次数的最大值
+        self._update_loop_count_max()
 
     def _restore_selection(self, scroll_to_end, select_index, previous_selection):
         """恢复选择状态"""
@@ -1718,6 +1800,7 @@ class AutoTestGUI:
 
     def _invalidate_relative_delay_cache(self):
         """使相对延时缓存失效"""
+        self._relative_delay_cache = {}
         self._relative_delay_valid = False
 
     def _get_selected_indices(self):
@@ -2015,8 +2098,8 @@ class AutoTestGUI:
         elif column == "#3":
             # 点击备注列：编辑备注
             self._edit_remark(row_id)
-        elif action_type in ['click', 'doubleclick', 'move', 'variable_input', 'input']:
-            # 点击/双击/移动/变量输入动作 - 编辑坐标和内容
+        elif action_type in ['click', 'doubleclick', 'move', 'variable_input', 'input', 'traverse_input']:
+            # 点击/双击/移动/变量输入/遍历输入动作 - 编辑坐标和内容
             self._hide_delay_spinbox()
             self.edit_action(event)
         else:
@@ -2475,16 +2558,12 @@ class AutoTestGUI:
         frame.pack(fill=tk.BOTH, expand=True)
 
         # 目标位置
-        ttk.Label(frame, text="点击位置:").grid(row=0, column=0, padx=5, pady=8, sticky="e")
+        ttk.Label(frame, text="点击位置:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
         x_var = tk.StringVar(value="")
         y_var = tk.StringVar(value="")
 
         pos_frame = ttk.Frame(frame)
-        pos_frame.grid(row=0, column=1, padx=5, pady=8, sticky="w")
-
-        # 录制位置按钮（放在前面）
-        record_btn = ttk.Button(pos_frame, text="录制")
-        record_btn.pack(side=tk.LEFT, padx=5)
+        pos_frame.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 
         ttk.Label(pos_frame, text="X:").pack(side=tk.LEFT)
         x_entry = ttk.Entry(pos_frame, width=8, textvariable=x_var)
@@ -2494,10 +2573,14 @@ class AutoTestGUI:
         y_entry = ttk.Entry(pos_frame, width=8, textvariable=y_var)
         y_entry.pack(side=tk.LEFT, padx=2)
 
+        # 录制位置按钮（放在最后）
+        record_btn = ttk.Button(pos_frame, text="录制")
+        record_btn.pack(side=tk.LEFT, padx=5)
+
         # 相对延时
-        ttk.Label(frame, text="相对延时(秒):").grid(row=1, column=0, padx=5, pady=8, sticky="e")
+        ttk.Label(frame, text="相对延时(秒):").grid(row=1, column=0, padx=5, pady=5, sticky="w")
         delay_var = tk.DoubleVar(value=relative_delay)
-        ttk.Entry(frame, width=15, textvariable=delay_var).grid(row=1, column=1, padx=5, pady=8, sticky="w")
+        ttk.Entry(frame, width=15, textvariable=delay_var).grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
         # 状态标签
         status_label = ttk.Label(frame, text="", foreground="blue")
@@ -2529,7 +2612,7 @@ class AutoTestGUI:
             except Exception as e:
                 messagebox.showerror("错误", f"输入无效: {str(e)}")
 
-        ttk.Button(frame, text="确定", command=confirm).grid(row=3, column=0, columnspan=2, pady=5)
+        ttk.Button(frame, text="确定", command=confirm).grid(row=3, column=0, columnspan=2, pady=3)
 
     def insert_input_action(self):
         """插入输入动作"""
@@ -2834,7 +2917,7 @@ class AutoTestGUI:
 
         dialog = tk.Toplevel(self.root)
         dialog.title("插入延时")
-        dialog.geometry("500x200")
+        dialog.geometry("540x160")
         dialog.transient(self.root)
         dialog.attributes('-topmost', True)
         dialog.grab_set()
@@ -3050,87 +3133,31 @@ class AutoTestGUI:
                 return
 
         dialog = tk.Toplevel(self.root)
-        dialog.title("插入循环组")
-        dialog.geometry("550x350")
+        dialog.title("设为循环组")
+        dialog.geometry("350x190")
         dialog.transient(self.root)
         dialog.attributes('-topmost', True)
         dialog.grab_set()
 
-        main_frame = ttk.Frame(dialog, padding="12")
+        main_frame = ttk.Frame(dialog, padding="20")
         main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 计算循环次数上限（如果包含列表遍历类型的遍历输入，最大值设为列表长度）
+        max_loop_count = 9999
+        for act in loop_actions_selected:
+            if act.get('type') == 'traverse_input' and act.get('traverse_type') == 'list':
+                values = act.get('traverse_values', [])
+                if values:
+                    max_loop_count = len(values)
+                    break
 
         # 循环次数
         loop_count_frame = ttk.Frame(main_frame)
-        loop_count_frame.pack(fill=tk.X, pady=5)
+        loop_count_frame.pack(fill=tk.X, pady=10)
         ttk.Label(loop_count_frame, text="循环次数：").pack(side=tk.LEFT)
-        loop_count_var = tk.StringVar(value="3")
-        ttk.Entry(loop_count_frame, width=15, textvariable=loop_count_var).pack(side=tk.LEFT, padx=8)
-
-        # 循环间隔类型选择
-        interval_type_var = tk.StringVar(value="fixed")
-
-        interval_type_frame = ttk.Frame(main_frame)
-        interval_type_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(interval_type_frame, text="间隔模式：").pack(side=tk.LEFT)
-        ttk.Radiobutton(interval_type_frame, text="固定", variable=interval_type_var, value="fixed",
-                        command=lambda: update_interval_ui("fixed")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(interval_type_frame, text="范围", variable=interval_type_var, value="range",
-                        command=lambda: update_interval_ui("range")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(interval_type_frame, text="列表", variable=interval_type_var, value="list",
-                        command=lambda: update_interval_ui("list")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(interval_type_frame, text="随机", variable=interval_type_var, value="random",
-                        command=lambda: update_interval_ui("random")).pack(side=tk.LEFT, padx=2)
-
-        # 间隔参数框架
-        interval_frame = ttk.Frame(main_frame)
-        interval_frame.pack(fill=tk.X, pady=5)
-
-        # 固定间隔
-        fixed_frame = ttk.Frame(interval_frame)
-        ttk.Label(fixed_frame, text="间隔(秒):").pack(side=tk.LEFT, padx=2)
-        loop_interval_var = tk.StringVar(value="0.5")
-        ttk.Entry(fixed_frame, width=10, textvariable=loop_interval_var).pack(side=tk.LEFT, padx=2)
-
-        # 范围间隔
-        range_frame = ttk.Frame(interval_frame)
-        ttk.Label(range_frame, text="最小:").pack(side=tk.LEFT, padx=2)
-        range_min_var = tk.StringVar(value="0.5")
-        ttk.Entry(range_frame, width=8, textvariable=range_min_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(range_frame, text="最大:").pack(side=tk.LEFT, padx=2)
-        range_max_var = tk.StringVar(value="2.0")
-        ttk.Entry(range_frame, width=8, textvariable=range_max_var).pack(side=tk.LEFT, padx=2)
-
-        # 列表间隔
-        list_frame = ttk.Frame(interval_frame)
-        ttk.Label(list_frame, text="列表(逗号分隔):").pack(side=tk.LEFT, padx=2)
-        list_values_var = tk.StringVar(value="0.5,1.0,1.5,2.0")
-        ttk.Entry(list_frame, width=20, textvariable=list_values_var).pack(side=tk.LEFT, padx=2)
-
-        # 随机间隔
-        random_frame = ttk.Frame(interval_frame)
-        ttk.Label(random_frame, text="最小:").pack(side=tk.LEFT, padx=2)
-        random_min_var = tk.StringVar(value="0.5")
-        ttk.Entry(random_frame, width=8, textvariable=random_min_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(random_frame, text="最大:").pack(side=tk.LEFT, padx=2)
-        random_max_var = tk.StringVar(value="2.0")
-        ttk.Entry(random_frame, width=8, textvariable=random_max_var).pack(side=tk.LEFT, padx=2)
-
-        def update_interval_ui(interval_type):
-            fixed_frame.pack_forget()
-            range_frame.pack_forget()
-            list_frame.pack_forget()
-            random_frame.pack_forget()
-            if interval_type == "fixed":
-                fixed_frame.pack(side=tk.LEFT, padx=2)
-            elif interval_type == "range":
-                range_frame.pack(side=tk.LEFT, padx=2)
-            elif interval_type == "list":
-                list_frame.pack(side=tk.LEFT, padx=2)
-            else:  # random
-                random_frame.pack(side=tk.LEFT, padx=2)
-
-        # 初始化UI状态
-        update_interval_ui("fixed")
+        loop_count_var = tk.IntVar(value=min(3, max_loop_count))
+        loop_count_spinbox = ttk.Spinbox(loop_count_frame, from_=1, to=max_loop_count, width=15, textvariable=loop_count_var)
+        loop_count_spinbox.pack(side=tk.LEFT, padx=8)
 
         # 选中的动作提示
         info_label = ttk.Label(main_frame, text=info_text)
@@ -3138,38 +3165,23 @@ class AutoTestGUI:
 
         def confirm():
             try:
-                loop_count = int(loop_count_var.get())
+                loop_count = loop_count_var.get()
 
                 if loop_count <= 0:
                     raise ValueError("循环次数必须大于0")
 
-                interval_type = interval_type_var.get()
-                if interval_type == "fixed":
-                    loop_interval = float(loop_interval_var.get())
-                    if loop_interval < 0:
-                        raise ValueError("间隔不能为负数")
-                    interval_params = {'type': 'fixed', 'value': loop_interval}
-                elif interval_type == "range":
-                    min_val = float(range_min_var.get())
-                    max_val = float(range_max_var.get())
-                    if min_val < 0 or max_val < min_val:
-                        raise ValueError("无效的范围")
-                    interval_params = {'type': 'range', 'min': min_val, 'max': max_val}
-                elif interval_type == "list":
-                    values_str = list_values_var.get().strip()
-                    if not values_str:
-                        raise ValueError("列表不能为空")
-                    try:
-                        values = [float(v.strip()) for v in values_str.split(',')]
-                    except ValueError:
-                        raise ValueError("列表格式无效，请使用逗号分隔的数字")
-                    interval_params = {'type': 'list', 'values': values}
-                else:  # random
-                    min_val = float(random_min_var.get())
-                    max_val = float(random_max_var.get())
-                    if min_val < 0 or max_val < min_val:
-                        raise ValueError("无效的范围")
-                    interval_params = {'type': 'random', 'min': min_val, 'max': max_val}
+                # 检查循环组内的遍历输入动作，自动调整循环次数为列表长度
+                for act in loop_actions_selected:
+                    if act.get('type') == 'traverse_input' and act.get('traverse_type') == 'list':
+                        values = act.get('traverse_values', [])
+                        if values and len(values) < loop_count:
+                            loop_count = len(values)
+                            loop_count_var.set(loop_count)
+                            break
+
+                # 使用固定间隔，默认0.5秒
+                interval_type = "fixed"
+                interval_params = {'type': 'fixed', 'value': 0.5}
 
                 if is_loop_inner:
                     parent_action = self.actions[parent_loop_idx]
@@ -4329,6 +4341,9 @@ class AutoTestGUI:
                 elif action_type == 'variable_input':
                     self._edit_nested_variable_input_action(action, row_id)
                     return
+                elif action_type == 'traverse_input':
+                    self._edit_nested_traverse_input_action(action, row_id)
+                    return
                 else:
                     self.edit_action_time(event)
                     return
@@ -4349,12 +4364,15 @@ class AutoTestGUI:
             # 输入动作 - 编辑输入
             elif action_type == 'variable_input':
                 self._edit_variable_input_action(action, index)
+            # 遍历输入 - 编辑遍历参数
+            elif action_type == 'traverse_input':
+                self._edit_traverse_input_action(action, index)
             # 输入循环 - 编辑参数
             elif action_type == 'input_loop':
                 self._edit_input_loop_action(action, index)
             # 循环组 - 显示编辑
             elif action_type == 'loop_group':
-                self.edit_action_time(event)
+                self._edit_top_loop_group(action, index)
             # 其他动作
             else:
                 messagebox.showinfo("提示", "该动作类型不支持编辑")
@@ -4544,13 +4562,202 @@ class AutoTestGUI:
 
         ttk.Button(frame, text="确定", command=confirm).grid(row=4, column=0, columnspan=2, pady=10)
 
+    def _edit_traverse_input_action(self, action, index):
+        """编辑遍历输入动作"""
+        self.in_dialog_operation = True
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("编辑遍历输入")
+        dialog.geometry("500x340")
+        dialog.transient(self.root)
+        dialog.attributes('-topmost', True)
+        dialog.grab_set()
+
+        def on_dialog_close():
+            self.in_dialog_operation = False
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
+
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 遍历类型选择
+        ttk.Label(main_frame, text="遍历类型:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        type_var = tk.StringVar(value=action.get('traverse_type', 'list'))
+        type_frame = ttk.Frame(main_frame)
+        type_frame.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        ttk.Radiobutton(type_frame, text="固定文本", variable=type_var, value="fixed_text",
+                       command=lambda: update_type_ui("fixed_text")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(type_frame, text="列表遍历", variable=type_var, value="list",
+                       command=lambda: update_type_ui("list")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(type_frame, text="序列", variable=type_var, value="sequence",
+                       command=lambda: update_type_ui("sequence")).pack(side=tk.LEFT, padx=5)
+
+        # 点击位置
+        ttk.Label(main_frame, text="点击位置:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
+        pos_frame = ttk.Frame(main_frame)
+        pos_frame.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+
+        x_var = tk.StringVar(value=str(action.get('x', '')))
+        y_var = tk.StringVar(value=str(action.get('y', '')))
+        ttk.Label(pos_frame, text="X:").pack(side=tk.LEFT)
+        ttk.Entry(pos_frame, width=8, textvariable=x_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(pos_frame, text="Y:").pack(side=tk.LEFT)
+        ttk.Entry(pos_frame, width=8, textvariable=y_var).pack(side=tk.LEFT, padx=2)
+
+        record_btn = ttk.Button(pos_frame, text="录制")
+        record_btn.pack(side=tk.LEFT, padx=5)
+
+        # 参数框架（动态切换）
+        params_frame = ttk.Frame(main_frame)
+        params_frame.grid(row=2, column=0, columnspan=2, sticky="w", pady=10)
+
+        # 列表遍历参数
+        list_frame = ttk.Frame(params_frame)
+        list_row1 = ttk.Frame(list_frame)
+        list_row1.pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(list_row1, text="遍历列表:").pack(side=tk.LEFT, padx=2)
+        list_text = tk.Text(list_row1, width=25, height=6)
+        list_text.pack(side=tk.LEFT, padx=2)
+        # 填充现有值
+        traverse_values = action.get('traverse_values', [])
+        if traverse_values:
+            list_text.insert(tk.END, '\n'.join(str(v) for v in traverse_values))
+        ttk.Label(list_frame, text="(每行一个值)").pack(side=tk.TOP, padx=2, pady=(2, 0))
+
+        # 序列参数
+        seq_frame = ttk.Frame(params_frame)
+        seq_row1 = ttk.Frame(seq_frame)
+        seq_row1.pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(seq_row1, text="起始值:").pack(side=tk.LEFT, padx=2)
+        start_var = tk.DoubleVar(value=action.get('start', 0))
+        ttk.Entry(seq_row1, width=8, textvariable=start_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row1, text="步距:").pack(side=tk.LEFT, padx=2)
+        step_var = tk.DoubleVar(value=action.get('step', 1))
+        ttk.Entry(seq_row1, width=8, textvariable=step_var).pack(side=tk.LEFT, padx=2)
+        seq_row2 = ttk.Frame(seq_frame)
+        seq_row2.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
+        ttk.Label(seq_row2, text="模板:").pack(side=tk.LEFT, padx=2)
+        seq_template_var = tk.StringVar(value=action.get('template', 'text{n}'))
+        ttk.Entry(seq_row2, width=15, textvariable=seq_template_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row2, text="(用{n}替换)").pack(side=tk.LEFT, padx=2)
+
+        # 固定文本参数
+        fixed_text_frame = ttk.Frame(params_frame)
+        ttk.Label(fixed_text_frame, text="输入文本:").pack(side=tk.LEFT, padx=2)
+        fixed_text_var = tk.StringVar(value=action.get('fixed_text', ''))
+        ttk.Entry(fixed_text_frame, width=25, textvariable=fixed_text_var).pack(side=tk.LEFT, padx=2)
+
+        def update_type_ui(mode):
+            list_frame.grid_forget()
+            seq_frame.grid_forget()
+            fixed_text_frame.grid_forget()
+            if mode == "list":
+                list_frame.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+            elif mode == "sequence":
+                seq_frame.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+            else:  # fixed_text
+                fixed_text_frame.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+
+        # 初始化UI
+        current_type = action.get('traverse_type', 'list')
+        update_type_ui(current_type)
+
+        # 录制按钮功能
+        def start_record():
+            dialog.withdraw()
+            dialog.update()
+            captured_pos = [None, None]
+
+            def on_click(x, y, button, pressed):
+                if pressed:
+                    captured_pos[0] = x
+                    captured_pos[1] = y
+                    return False
+
+            listener = mouse.Listener(on_click=on_click)
+            listener.start()
+            listener.join()
+
+            if captured_pos[0] is not None:
+                x_var.set(str(captured_pos[0]))
+                y_var.set(str(captured_pos[1]))
+            dialog.deiconify()
+
+        record_btn.config(command=start_record)
+
+        # 相对延时
+        prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
+        relative_delay = action.get('time', 0) - prev_time
+
+        ttk.Label(main_frame, text="相对延时(秒):").grid(row=3, column=0, padx=5, pady=5, sticky="e")
+        delay_var = tk.DoubleVar(value=relative_delay)
+        ttk.Entry(main_frame, width=15, textvariable=delay_var).grid(row=3, column=1, padx=5, pady=5, sticky="w")
+
+        # 按钮区域
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=15)
+
+        def confirm():
+            try:
+                x = int(x_var.get()) if x_var.get() else 0
+                y = int(y_var.get()) if y_var.get() else 0
+
+                # 获取遍历值列表
+                traverse_type = type_var.get()
+                values = []
+                start = 0
+                step = 1
+                fixed_text = ""
+                if traverse_type == "list":
+                    text_content = list_text.get("1.0", tk.END).strip()
+                    if not text_content:
+                        raise ValueError("遍历列表不能为空")
+                    values = [line.strip() for line in text_content.split('\n') if line.strip()]
+                elif traverse_type == "sequence":
+                    start = start_var.get()
+                    step = step_var.get()
+                    seq_template = seq_template_var.get()
+                else:  # fixed_text
+                    fixed_text = fixed_text_var.get()
+                    if not fixed_text:
+                        raise ValueError("输入文本不能为空")
+
+                # 更新动作
+                action['traverse_type'] = traverse_type
+                action['x'] = x
+                action['y'] = y
+                action['traverse_values'] = values if traverse_type == "list" else []
+                action['start'] = start if traverse_type == "sequence" else None
+                action['step'] = step if traverse_type == "sequence" else None
+                action['template'] = seq_template if traverse_type == "sequence" else None
+                action['fixed_text'] = fixed_text if traverse_type == "fixed_text" else None
+
+                # 计算新的绝对时间
+                prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
+                new_absolute_time = prev_time + delay_var.get()
+                old_time = action.get('time', 0)
+                delta = new_absolute_time - old_time
+                action['time'] = new_absolute_time
+                self._shift_action_times(index + 1, delta)
+
+                self._update_action_list(select_index=index)
+                self.in_dialog_operation = False
+                dialog.destroy()
+            except ValueError as e:
+                messagebox.showerror("错误", f"输入无效: {str(e)}")
+
+        ttk.Button(btn_frame, text="确定", command=confirm).pack(side=tk.LEFT, padx=20)
+        ttk.Button(btn_frame, text="取消", command=on_dialog_close).pack(side=tk.LEFT, padx=5)
+
     def _edit_screenshot_action(self, action, index):
         """编辑截屏动作"""
         self.in_dialog_operation = True
 
         dialog = tk.Toplevel(self.root)
         dialog.title("编辑截屏")
-        dialog.geometry("450x220")
+        dialog.geometry("560x220")
         dialog.transient(self.root)
         dialog.attributes('-topmost', True)
         dialog.grab_set()
@@ -4580,18 +4787,20 @@ class AutoTestGUI:
         # 名称
         ttk.Label(main_frame, text="名称:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
         name_var = tk.StringVar(value=action.get('filename', 'screenshot'))
-        ttk.Entry(main_frame, textvariable=name_var, width=15).grid(row=1, column=1, padx=5, pady=5, sticky="w")
+        ttk.Entry(main_frame, textvariable=name_var, width=15).grid(row=1, column=1, padx=0, pady=5, sticky="w")
 
         # 延时
-        ttk.Label(main_frame, text="延时:").grid(row=1, column=2, padx=5, pady=5, sticky="e")
+        delay_frame = ttk.Frame(main_frame)
+        delay_frame.grid(row=1, column=2, padx=0, pady=5, sticky="w")
+        ttk.Label(delay_frame, text="延时:").pack(side=tk.LEFT, padx=0)
         delay_var = tk.DoubleVar(value=action.get('delay', 0))
-        ttk.Entry(main_frame, textvariable=delay_var, width=8).grid(row=1, column=3, padx=5, pady=5, sticky="w")
+        ttk.Entry(delay_frame, textvariable=delay_var, width=8).pack(side=tk.LEFT, padx=0)
 
         # 命名方式
         ttk.Label(main_frame, text="命名:").grid(row=2, column=0, padx=5, pady=5, sticky="e")
         naming_var = tk.StringVar(value=action.get('naming', 'timestamp'))
-        ttk.Radiobutton(main_frame, text="时间戳", variable=naming_var, value="timestamp").grid(row=2, column=1, padx=5, pady=5, sticky="w")
-        ttk.Radiobutton(main_frame, text="递增序号", variable=naming_var, value="increment").grid(row=2, column=2, padx=5, pady=5, sticky="w")
+        ttk.Radiobutton(main_frame, text="时间戳", variable=naming_var, value="timestamp").grid(row=2, column=1, padx=2, pady=5, sticky="w")
+        ttk.Radiobutton(main_frame, text="递增序号", variable=naming_var, value="increment").grid(row=2, column=2, padx=2, pady=5, sticky="w")
 
         def confirm():
             action['directory'] = dir_var.get()
@@ -5458,13 +5667,190 @@ class AutoTestGUI:
 
         ttk.Button(frame, text="确定", command=confirm).grid(row=7, column=0, columnspan=2, pady=15)
 
+    def _edit_nested_traverse_input_action(self, action, row_id):
+        """编辑嵌套的遍历输入动作"""
+        self.in_dialog_operation = True
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("编辑遍历输入")
+        dialog.geometry("500x340")
+        dialog.transient(self.root)
+        dialog.attributes('-topmost', True)
+
+        def on_dialog_close():
+            self.in_dialog_operation = False
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
+        dialog.grab_set()
+
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 遍历类型选择
+        ttk.Label(main_frame, text="遍历类型:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        type_var = tk.StringVar(value=action.get('traverse_type', 'list'))
+        type_frame = ttk.Frame(main_frame)
+        type_frame.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        ttk.Radiobutton(type_frame, text="固定文本", variable=type_var, value="fixed_text",
+                       command=lambda: update_type_ui("fixed_text")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(type_frame, text="列表遍历", variable=type_var, value="list",
+                       command=lambda: update_type_ui("list")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(type_frame, text="序列", variable=type_var, value="sequence",
+                       command=lambda: update_type_ui("sequence")).pack(side=tk.LEFT, padx=5)
+
+        # 点击位置
+        ttk.Label(main_frame, text="点击位置:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
+        pos_frame = ttk.Frame(main_frame)
+        pos_frame.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+
+        x_var = tk.StringVar(value=str(action.get('x', '')))
+        y_var = tk.StringVar(value=str(action.get('y', '')))
+        ttk.Label(pos_frame, text="X:").pack(side=tk.LEFT)
+        ttk.Entry(pos_frame, width=8, textvariable=x_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(pos_frame, text="Y:").pack(side=tk.LEFT)
+        ttk.Entry(pos_frame, width=8, textvariable=y_var).pack(side=tk.LEFT, padx=2)
+
+        record_btn = ttk.Button(pos_frame, text="录制")
+        record_btn.pack(side=tk.LEFT, padx=5)
+
+        # 参数框架（动态切换）
+        params_frame = ttk.Frame(main_frame)
+        params_frame.grid(row=2, column=0, columnspan=2, sticky="w", pady=10)
+
+        # 列表遍历参数
+        list_frame = ttk.Frame(params_frame)
+        list_row1 = ttk.Frame(list_frame)
+        list_row1.pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(list_row1, text="遍历列表:").pack(side=tk.LEFT, padx=2)
+        list_text = tk.Text(list_row1, width=25, height=6)
+        list_text.pack(side=tk.LEFT, padx=2)
+        traverse_values = action.get('traverse_values', [])
+        if traverse_values:
+            list_text.insert(tk.END, '\n'.join(str(v) for v in traverse_values))
+        ttk.Label(list_frame, text="(每行一个值)").pack(side=tk.TOP, padx=2, pady=(2, 0))
+
+        # 序列参数
+        seq_frame = ttk.Frame(params_frame)
+        seq_row1 = ttk.Frame(seq_frame)
+        seq_row1.pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(seq_row1, text="起始值:").pack(side=tk.LEFT, padx=2)
+        start_var = tk.DoubleVar(value=action.get('start', 0))
+        ttk.Entry(seq_row1, width=8, textvariable=start_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row1, text="步距:").pack(side=tk.LEFT, padx=2)
+        step_var = tk.DoubleVar(value=action.get('step', 1))
+        ttk.Entry(seq_row1, width=8, textvariable=step_var).pack(side=tk.LEFT, padx=2)
+        seq_row2 = ttk.Frame(seq_frame)
+        seq_row2.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
+        ttk.Label(seq_row2, text="模板:").pack(side=tk.LEFT, padx=2)
+        seq_template_var = tk.StringVar(value=action.get('template', 'text{n}'))
+        ttk.Entry(seq_row2, width=15, textvariable=seq_template_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row2, text="(用{n}替换)").pack(side=tk.LEFT, padx=2)
+
+        # 固定文本参数
+        fixed_text_frame = ttk.Frame(params_frame)
+        ttk.Label(fixed_text_frame, text="输入文本:").pack(side=tk.LEFT, padx=2)
+        fixed_text_var = tk.StringVar(value=action.get('fixed_text', ''))
+        ttk.Entry(fixed_text_frame, width=25, textvariable=fixed_text_var).pack(side=tk.LEFT, padx=2)
+
+        def update_type_ui(mode):
+            list_frame.grid_forget()
+            seq_frame.grid_forget()
+            fixed_text_frame.grid_forget()
+            if mode == "list":
+                list_frame.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+            elif mode == "sequence":
+                seq_frame.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+            else:  # fixed_text
+                fixed_text_frame.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+
+        # 初始化UI
+        current_type = action.get('traverse_type', 'list')
+        update_type_ui(current_type)
+
+        # 相对延时
+        ttk.Label(main_frame, text="相对延时(秒):").grid(row=3, column=0, padx=5, pady=5, sticky="e")
+        delay_var = tk.DoubleVar(value=action.get('time', 0))
+        ttk.Entry(main_frame, width=15, textvariable=delay_var).grid(row=3, column=1, padx=5, pady=5, sticky="w")
+
+        # 按钮区域
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=15)
+
+        # 录制按钮功能
+        def start_record():
+            dialog.withdraw()
+            dialog.update()
+            captured_pos = [None, None]
+
+            def on_click(x, y, button, pressed):
+                if pressed:
+                    captured_pos[0] = x
+                    captured_pos[1] = y
+                    return False
+
+            listener = mouse.Listener(on_click=on_click)
+            listener.start()
+            listener.join()
+
+            if captured_pos[0] is not None:
+                x_var.set(str(captured_pos[0]))
+                y_var.set(str(captured_pos[1]))
+            dialog.deiconify()
+
+        record_btn.config(command=start_record)
+
+        def confirm():
+            try:
+                x = int(x_var.get()) if x_var.get() else 0
+                y = int(y_var.get()) if y_var.get() else 0
+
+                traverse_type = type_var.get()
+                values = []
+                start = 0
+                step = 1
+                fixed_text = ""
+                if traverse_type == "list":
+                    text_content = list_text.get("1.0", tk.END).strip()
+                    if not text_content:
+                        raise ValueError("遍历列表不能为空")
+                    values = [line.strip() for line in text_content.split('\n') if line.strip()]
+                elif traverse_type == "sequence":
+                    start = start_var.get()
+                    step = step_var.get()
+                    seq_template = seq_template_var.get()
+                else:  # fixed_text
+                    fixed_text = fixed_text_var.get()
+                    if not fixed_text:
+                        raise ValueError("输入文本不能为空")
+
+                # 更新动作
+                action['traverse_type'] = traverse_type
+                action['x'] = x
+                action['y'] = y
+                action['traverse_values'] = values if traverse_type == "list" else []
+                action['start'] = start if traverse_type == "sequence" else None
+                action['step'] = step if traverse_type == "sequence" else None
+                action['template'] = seq_template if traverse_type == "sequence" else None
+                action['fixed_text'] = fixed_text if traverse_type == "fixed_text" else None
+                action['time'] = delay_var.get()
+
+                self._update_action_list()
+                self.in_dialog_operation = False
+                dialog.destroy()
+            except ValueError as e:
+                messagebox.showerror("错误", f"输入无效: {str(e)}")
+
+        ttk.Button(btn_frame, text="确定", command=confirm).pack(side=tk.LEFT, padx=20)
+        ttk.Button(btn_frame, text="取消", command=on_dialog_close).pack(side=tk.LEFT, padx=5)
+
     def _edit_nested_loop_group(self, action, row_id):
         """编辑嵌套的循环组"""
         self.in_dialog_operation = True
 
         dialog = tk.Toplevel(self.root)
         dialog.title("编辑循环组")
-        dialog.geometry("550x320")
+        dialog.geometry("385x225")
         dialog.transient(self.root)
         dialog.attributes('-topmost', True)
 
@@ -5478,10 +5864,21 @@ class AutoTestGUI:
         frame = ttk.Frame(dialog, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
 
+        # 计算循环次数上限（如果包含列表遍历类型的遍历输入，最大值设为列表长度）
+        loop_actions = action.get('loop_actions', [])
+        max_loop_count = 9999
+        for act in loop_actions:
+            if act.get('type') == 'traverse_input' and act.get('traverse_type') == 'list':
+                values = act.get('traverse_values', [])
+                if values:
+                    max_loop_count = len(values)
+                    break
+
         # 循环次数
         ttk.Label(frame, text="循环次数:").grid(row=0, column=0, padx=5, pady=10, sticky="e")
-        loop_count_var = tk.IntVar(value=action.get('loop_count', 1))
-        ttk.Entry(frame, width=15, textvariable=loop_count_var).grid(row=0, column=1, padx=5, pady=10, sticky="w")
+        loop_count_var = tk.IntVar(value=min(action.get('loop_count', 1), max_loop_count))
+        loop_count_spinbox = ttk.Spinbox(frame, from_=1, to=max_loop_count, width=15, textvariable=loop_count_var)
+        loop_count_spinbox.grid(row=0, column=1, padx=5, pady=10, sticky="w")
 
         # 循环间隔类型选择
         interval_type_var = tk.StringVar(value=action.get('loop_interval_type', 'fixed'))
@@ -5597,6 +5994,58 @@ class AutoTestGUI:
                 messagebox.showerror("错误", f"输入无效: {str(e)}")
 
         ttk.Button(frame, text="确定", command=confirm).grid(row=3, column=0, columnspan=2, pady=10)
+
+    def _edit_top_loop_group(self, action, index):
+        """编辑顶层的循环组"""
+        self.in_dialog_operation = True
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("编辑循环组")
+        dialog.geometry("170x90")
+        dialog.transient(self.root)
+        dialog.attributes('-topmost', True)
+
+        def on_dialog_close():
+            self.in_dialog_operation = False
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
+        dialog.grab_set()
+
+        frame = ttk.Frame(dialog, padding="20")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # 计算循环次数上限（如果包含列表遍历类型的遍历输入，最大值设为列表长度）
+        loop_actions = action.get('loop_actions', [])
+        max_loop_count = 9999
+        for act in loop_actions:
+            if act.get('type') == 'traverse_input' and act.get('traverse_type') == 'list':
+                values = act.get('traverse_values', [])
+                if values:
+                    max_loop_count = len(values)
+                    break
+
+        # 循环次数
+        loop_count_frame = ttk.Frame(frame)
+        loop_count_frame.pack(fill=tk.X, pady=10)
+        ttk.Label(loop_count_frame, text="循环次数：").pack(side=tk.LEFT)
+        loop_count_var = tk.IntVar(value=min(action.get('loop_count', 1), max_loop_count))
+        loop_count_spinbox = ttk.Spinbox(loop_count_frame, from_=1, to=max_loop_count, width=15, textvariable=loop_count_var)
+        loop_count_spinbox.pack(side=tk.LEFT, padx=8)
+
+        def confirm():
+            try:
+                loop_count = loop_count_var.get()
+                if loop_count < 1:
+                    raise ValueError("循环次数至少为1")
+                action['loop_count'] = loop_count
+                self._update_action_list(select_index=index)
+                self.in_dialog_operation = False
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("错误", f"输入无效: {str(e)}")
+
+        ttk.Button(frame, text="确定", command=confirm).pack(pady=10)
 
     def _edit_nested_action_time(self, action, row_id):
         """编辑嵌套动作的时间（延时等）"""
@@ -5984,32 +6433,89 @@ class AutoTestGUI:
             messagebox.showerror("错误", f"修改时间失败: {str(e)}")
 
     def add_screenshot_action(self):
-        """添加截屏动作到动作列表，支持时间戳和序号递增选择"""
-        action = {
-            'type': 'screenshot',
-            'naming': self.screenshot_naming_var.get(),
-            'directory': self.screenshot_dir_var.get(),
-            'filename': self.screenshot_name_var.get(),
-            'delay': self.screenshot_delay_var.get()
-        }
-        self.actions.append(action)
-        self._update_action_list(scroll_to_end=True)
+        """添加截屏动作 - 弹出配置对话框"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("截屏设置")
+        dialog.geometry("560x200")
+        dialog.transient(self.root)
+        dialog.attributes('-topmost', True)
+        dialog.grab_set()
 
-    def take_screenshot(self, delay=0):
+        def on_dialog_close():
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
+
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 目录
+        ttk.Label(main_frame, text="目录:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        ss_dir_var = tk.StringVar(value=self.screenshot_dir_var.get())
+        ss_dir_entry = ttk.Entry(main_frame, textvariable=ss_dir_var, width=30)
+        ss_dir_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+
+        def select_ss_dir():
+            dir_path = filedialog.askdirectory(initialdir=ss_dir_var.get(), title="选择截屏保存目录")
+            if dir_path:
+                ss_dir_var.set(dir_path)
+
+        ttk.Button(main_frame, text="选择", command=select_ss_dir).grid(row=0, column=2, padx=5, pady=5)
+
+        # 名称
+        ttk.Label(main_frame, text="名称:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
+        ss_name_var = tk.StringVar(value=self.screenshot_name_var.get())
+        ss_name_entry = ttk.Entry(main_frame, textvariable=ss_name_var, width=15)
+        ss_name_entry.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+
+        # 延时
+        delay_frame = ttk.Frame(main_frame)
+        delay_frame.grid(row=1, column=2, columnspan=2, padx=5, pady=5, sticky="w")
+        ttk.Label(delay_frame, text="延时:").pack(side=tk.LEFT)
+        ss_delay_var = tk.DoubleVar(value=self.screenshot_delay_var.get())
+        ttk.Entry(delay_frame, textvariable=ss_delay_var, width=8).pack(side=tk.LEFT, padx=2)
+
+        # 命名方式
+        ttk.Label(main_frame, text="命名:").grid(row=2, column=0, padx=5, pady=5, sticky="e")
+        ss_naming_var = tk.StringVar(value="timestamp")
+        ttk.Radiobutton(main_frame, text="时间戳", variable=ss_naming_var, value="timestamp").grid(row=2, column=1, padx=5, pady=5, sticky="w")
+        ttk.Radiobutton(main_frame, text="递增序号", variable=ss_naming_var, value="increment").grid(row=2, column=2, padx=5, pady=5, sticky="w")
+
+        def confirm_screenshot():
+            screenshot_action = {
+                'type': 'screenshot',
+                'naming': ss_naming_var.get(),
+                'directory': ss_dir_var.get(),
+                'filename': ss_name_var.get(),
+                'delay': ss_delay_var.get()
+            }
+            self.actions.append(screenshot_action)
+            self._update_action_list(scroll_to_end=True)
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.grid(row=3, column=0, columnspan=4, pady=10)
+        ttk.Button(btn_frame, text="确定", command=confirm_screenshot).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+    def take_screenshot(self, delay=0, directory=None, filename=None, naming=None):
         """截屏并保存到指定目录，支持延时和命名方式选择"""
         time.sleep(delay)  # 添加延时
-        directory = self.screenshot_dir_var.get()
+        # 使用传入的参数或全局设置
+        directory = directory if directory else self.screenshot_dir_var.get()
+        filename = filename if filename else self.screenshot_name_var.get()
+        naming = naming if naming else self.screenshot_naming_var.get()
+
         if not os.path.exists(directory):
             os.makedirs(directory)
 
-        if self.screenshot_naming_var.get() == "timestamp":
-            filename = f"{self.screenshot_name_var.get()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        if naming == "timestamp":
+            filepath = os.path.join(directory, f"{filename}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
         else:
-            existing_files = [f for f in os.listdir(directory) if f.startswith(self.screenshot_name_var.get()) and f.endswith('.png')]
+            existing_files = [f for f in os.listdir(directory) if f.startswith(filename) and f.endswith('.png')]
             next_index = len(existing_files) + 1
-            filename = f"{self.screenshot_name_var.get()}_{next_index}.png"
+            filepath = os.path.join(directory, f"{filename}_{next_index}.png")
 
-        filepath = os.path.join(directory, filename)
         try:
             screenshot = ImageGrab.grab()
             screenshot.save(filepath)
