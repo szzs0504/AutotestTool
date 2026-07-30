@@ -3044,6 +3044,8 @@ class AutoTestGUI:
                     loop_actions = parent_action.setdefault('loop_actions', [])
                     insert_child_pos = child_idx + 1
                     loop_actions.insert(insert_child_pos, action)
+                    # 调整循环组内后续动作的time，保持相对延时不变
+                    self._shift_loop_action_times(loop_actions, insert_child_pos + 1, delay_var.get())
                     self._update_action_list(select_index=parent_loop_idx)
                 else:
                     # 普通选择
@@ -3357,6 +3359,8 @@ class AutoTestGUI:
                     insert_child_pos = child_idx + 1
                     loop_actions.insert(insert_child_pos, action)
 
+                    # 调整循环组内后续动作的time，保持相对延时不变
+                    self._shift_loop_action_times(loop_actions, insert_child_pos + 1, 0.5)
                     # 更新循环组内的延时
                     self._update_action_list(select_index=parent_loop_idx)
                 else:
@@ -3557,10 +3561,24 @@ class AutoTestGUI:
                     parent_action = self.actions[parent_loop_idx]
                     loop_actions = parent_action.setdefault('loop_actions', [])
 
-                    # 在循环组内选中动作之后插入
+                    # 在循环组内选中动作之后插入的位置
                     insert_child_pos = child_idx + 1
+
+                    # 计算新动作的time（基于前一个动作）
+                    if insert_child_pos > 0 and insert_child_pos <= len(loop_actions) and 'time' in loop_actions[insert_child_pos - 1]:
+                        prev_time = loop_actions[insert_child_pos - 1].get('time', 0)
+                        if delay_type == "random":
+                            action['time'] = prev_time + action.get('min_delay', 0)
+                        elif delay_type == "multiply":
+                            action['time'] = prev_time + action.get('base_delay', 0)
+                        else:  # arithmetic
+                            action['time'] = prev_time + action.get('start_delay', 0)
+
                     loop_actions.insert(insert_child_pos, action)
 
+                    # 调整循环组内后续动作的time，保持相对延时不变
+                    shift = action.get('min_delay', 0) if delay_type == "random" else (action.get('base_delay', 0) if delay_type == "multiply" else action.get('start_delay', 0))
+                    self._shift_loop_action_times(loop_actions, insert_child_pos + 1, shift)
                     # 更新循环组内的延时
                     self._update_action_list(select_index=parent_loop_idx)
                 else:
@@ -4834,6 +4852,15 @@ class AutoTestGUI:
         for i in range(start_index, len(self.actions)):
             if 'time' in self.actions[i]:
                 self.actions[i]['time'] = max(0, self.actions[i]['time'] + delta)
+
+    def _shift_loop_action_times(self, loop_actions, start_index, delta):
+        """整体平移循环组内从指定索引开始的动作时间，保持相对间隔不变"""
+        if delta == 0 or start_index >= len(loop_actions):
+            return
+
+        for i in range(start_index, len(loop_actions)):
+            if 'time' in loop_actions[i]:
+                loop_actions[i]['time'] = max(0, loop_actions[i]['time'] + delta)
 
     def edit_action(self, event):
         """编辑动作 - 根据动作类型显示不同的编辑对话框"""
