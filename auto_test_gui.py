@@ -3021,26 +3021,7 @@ class AutoTestGUI:
                 has_loop_inner = any(isinstance(s, tuple) and s[0] == 'loop' for s in selection)
 
                 if has_loop_inner:
-                    # 计算新动作的绝对时间 = 前一个动作的time + 相对延时（循环组内）
-                    new_time = delay_var.get()
-                    if child_idx > 0 and 'time' in loop_actions[child_idx - 1]:
-                        new_time = loop_actions[child_idx - 1].get('time', 0) + delay_var.get()
-                else:
-                    # 计算新动作的绝对时间 = 前一个动作的time + 相对延时（顶层）
-                    new_time = delay_var.get()
-                    if insert_pos > 0 and 'time' in self.actions[insert_pos - 1]:
-                        new_time = self.actions[insert_pos - 1].get('time', 0) + delay_var.get()
-
-                action = {
-                    'type': 'click',
-                    'x': target_x,
-                    'y': target_y,
-                    'button': 'left',
-                    'time': new_time
-                }
-
-                if has_loop_inner:
-                    # 选择的是循环组内的动作
+                    # 选择的是循环组内的动作 - 先获取索引信息
                     for s in selection:
                         if isinstance(s, tuple) and s[0] == 'loop':
                             parent_loop_idx = s[1]
@@ -3048,18 +3029,44 @@ class AutoTestGUI:
                             break
                     parent_action = self.actions[parent_loop_idx]
                     loop_actions = parent_action.setdefault('loop_actions', [])
+
+                    # 计算新动作的绝对时间 = 前一个动作的time + 相对延时（循环组内）
+                    new_time = delay_var.get()
+                    if child_idx > 0 and 'time' in loop_actions[child_idx - 1]:
+                        new_time = loop_actions[child_idx - 1].get('time', 0) + delay_var.get()
+
                     insert_child_pos = child_idx + 1
+                    action = {
+                        'type': 'click',
+                        'x': target_x,
+                        'y': target_y,
+                        'button': 'left',
+                        'time': new_time
+                    }
                     loop_actions.insert(insert_child_pos, action)
                     # 调整循环组内后续动作的time，保持相对延时不变
                     self._shift_loop_action_times(loop_actions, insert_child_pos + 1, delay_var.get())
                     self._update_action_list(select_index=parent_loop_idx)
                 else:
-                    # 普通选择
+                    # 普通选择 - 先获取索引信息
                     int_indices = [s for s in selection if isinstance(s, int)]
                     if int_indices:
                         insert_pos = int_indices[-1] + 1
                     else:
                         insert_pos = len(self.actions)
+
+                    # 计算新动作的绝对时间 = 前一个动作的time + 相对延时（顶层）
+                    new_time = delay_var.get()
+                    if insert_pos > 0 and 'time' in self.actions[insert_pos - 1]:
+                        new_time = self.actions[insert_pos - 1].get('time', 0) + delay_var.get()
+
+                    action = {
+                        'type': 'click',
+                        'x': target_x,
+                        'y': target_y,
+                        'button': 'left',
+                        'time': new_time
+                    }
                     self.actions.insert(insert_pos, action)
                     # 调整后续动作的time，保持相对延时不变
                     self._shift_action_times(insert_pos + 1, delay_var.get())
