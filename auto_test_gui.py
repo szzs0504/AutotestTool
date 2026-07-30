@@ -3567,7 +3567,9 @@ class AutoTestGUI:
                     # 计算新动作的time（基于前一个动作）
                     if insert_child_pos > 0 and insert_child_pos <= len(loop_actions) and 'time' in loop_actions[insert_child_pos - 1]:
                         prev_time = loop_actions[insert_child_pos - 1].get('time', 0)
-                        if delay_type == "random":
+                        if delay_type == "fixed":
+                            action['time'] = prev_time + action.get('delay', 0)
+                        elif delay_type == "random":
                             action['time'] = prev_time + action.get('min_delay', 0)
                         elif delay_type == "multiply":
                             action['time'] = prev_time + action.get('base_delay', 0)
@@ -3577,7 +3579,14 @@ class AutoTestGUI:
                     loop_actions.insert(insert_child_pos, action)
 
                     # 调整循环组内后续动作的time，保持相对延时不变
-                    shift = action.get('min_delay', 0) if delay_type == "random" else (action.get('base_delay', 0) if delay_type == "multiply" else action.get('start_delay', 0))
+                    if delay_type == "fixed":
+                        shift = action.get('delay', 0)
+                    elif delay_type == "random":
+                        shift = action.get('min_delay', 0)
+                    elif delay_type == "multiply":
+                        shift = action.get('base_delay', 0)
+                    else:  # arithmetic
+                        shift = action.get('start_delay', 0)
                     self._shift_loop_action_times(loop_actions, insert_child_pos + 1, shift)
                     # 更新循环组内的延时
                     self._update_action_list(select_index=parent_loop_idx)
@@ -3594,7 +3603,9 @@ class AutoTestGUI:
                     if insert_pos > 0 and self.actions:
                         prev_time = self.actions[insert_pos - 1].get('time', 0)
                         # 根据延时类型计算新动作的time
-                        if delay_type == "random":
+                        if delay_type == "fixed":
+                            action['time'] = prev_time + action.get('delay', 0)
+                        elif delay_type == "random":
                             action['time'] = prev_time + action.get('min_delay', 0)
                         elif delay_type == "multiply":
                             action['time'] = prev_time + action.get('base_delay', 0)
@@ -3603,7 +3614,14 @@ class AutoTestGUI:
 
                     self.actions.insert(insert_pos, action)
                     # 调整后续动作的time
-                    shift = action.get('min_delay', 0) if delay_type == "random" else (action.get('base_delay', 0) if delay_type == "multiply" else action.get('start_delay', 0))
+                    if delay_type == "fixed":
+                        shift = action.get('delay', 0)
+                    elif delay_type == "random":
+                        shift = action.get('min_delay', 0)
+                    elif delay_type == "multiply":
+                        shift = action.get('base_delay', 0)
+                    else:  # arithmetic
+                        shift = action.get('start_delay', 0)
                     self._shift_action_times(insert_pos + 1, shift)
                     self._update_action_list(select_index=insert_pos)
 
