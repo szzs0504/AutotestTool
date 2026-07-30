@@ -3016,10 +3016,20 @@ class AutoTestGUI:
                 if target_x is None or target_y is None:
                     raise ValueError("请输入有效的坐标")
 
-                # 计算新动作的绝对时间 = 前一个动作的time + 相对延时
-                new_time = delay_var.get()
-                if insert_pos > 0 and 'time' in self.actions[insert_pos - 1]:
-                    new_time = self.actions[insert_pos - 1].get('time', 0) + delay_var.get()
+                # 重新获取选择并检查是否循环组内
+                selection = self._get_selected_indices()
+                has_loop_inner = any(isinstance(s, tuple) and s[0] == 'loop' for s in selection)
+
+                if has_loop_inner:
+                    # 计算新动作的绝对时间 = 前一个动作的time + 相对延时（循环组内）
+                    new_time = delay_var.get()
+                    if child_idx > 0 and 'time' in loop_actions[child_idx - 1]:
+                        new_time = loop_actions[child_idx - 1].get('time', 0) + delay_var.get()
+                else:
+                    # 计算新动作的绝对时间 = 前一个动作的time + 相对延时（顶层）
+                    new_time = delay_var.get()
+                    if insert_pos > 0 and 'time' in self.actions[insert_pos - 1]:
+                        new_time = self.actions[insert_pos - 1].get('time', 0) + delay_var.get()
 
                 action = {
                     'type': 'click',
@@ -3028,10 +3038,6 @@ class AutoTestGUI:
                     'button': 'left',
                     'time': new_time
                 }
-
-                # 重新获取选择并检查是否循环组内
-                selection = self._get_selected_indices()
-                has_loop_inner = any(isinstance(s, tuple) and s[0] == 'loop' for s in selection)
 
                 if has_loop_inner:
                     # 选择的是循环组内的动作
