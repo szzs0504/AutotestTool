@@ -1032,10 +1032,10 @@ class AutoTestGUI:
             value = action.get('value', '')
             clear_text = action.get('clear_text', True)
 
-            # 处理相对延时
-            action_time = action.get('time', 0)
-            if action_time > 0:
-                time.sleep(action_time)
+            # 处理延时（执行前等待时间）
+            delay = action.get('delay', 0)
+            if delay > 0:
+                time.sleep(delay)
 
             if target_x is not None and target_y is not None:
                 pyautogui.moveTo(target_x, target_y, duration=0.1)
@@ -1229,8 +1229,6 @@ class AutoTestGUI:
 
                 self.update_playback_info(f"开始执行第 {loop + 1}/{loops} 轮")
 
-                last_action_time = 0  # 初始化上一个动作的时间
-
                 for i, action in enumerate(self.actions):
                     # 检查是否按下Ctrl+Q（兼容性处理，防止遗漏）
                     if not self.is_playing:
@@ -1252,9 +1250,9 @@ class AutoTestGUI:
                         self.root.after(0, lambda: self.status_var.set("回放已中止（FAILSAFE触发）"))
                         return
 
-                    # 计算需要等待的时间
+                    # 计算需要等待的时间（直接使用 delay 字段）
                     if i > 0:
-                        wait_time = action.get('time', 0) - last_action_time
+                        wait_time = action.get('delay', 0)
                         if wait_time > 0:
                             if not self._safe_sleep_with_failsafe(wait_time, index):
                                 # 被故障保护中断
@@ -1480,8 +1478,6 @@ class AutoTestGUI:
                         else:
                             self.update_playback_info(f"遍历输入: 无可用值(循环{loop+1}超过列表长度)")
 
-                    last_action_time = action.get('time', 0)
-
                 if loop < loops - 1:
                     if self.interval_random.get():
                         wait_time = random.uniform(min_interval, max_interval)
@@ -1604,19 +1600,19 @@ class AutoTestGUI:
         
         if not filepath:
             return
-            
+
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 self.actions = json.load(f)
-            # 为每个动作设置 display_delay
+            # 为每个动作设置 delay（兼容旧格式）
             for i, action in enumerate(self.actions):
-                if 'display_delay' not in action:
+                if 'delay' not in action:
                     if i == 0:
-                        action['display_delay'] = action.get('time', 0)
+                        action['delay'] = action.get('time', 0)
                     else:
                         prev_time = self.actions[i - 1].get('time', 0)
                         curr_time = action.get('time', 0)
-                        action['display_delay'] = curr_time - prev_time
+                        action['delay'] = curr_time - prev_time
             self._update_action_list()  # 更新动作列表显示
             messagebox.showinfo("成功", "动作已加载！")
         except Exception as e:
@@ -1722,17 +1718,10 @@ class AutoTestGUI:
                 nested_loop_actions = loop_action.get('loop_actions', [])
                 self._add_loop_actions_to_tree(nested_parent_id, nested_loop_actions, parent_idx, None, None, None, depth + 1)
             else:
-                # 普通动作 - 计算延时
+                # 普通动作 - 直接使用 delay 字段
                 action_text = self._describe_action(loop_action)
                 loop_remark = loop_action.get('remark', '')
-
-                # 计算相对延时
-                if j == 0:
-                    delay_text = f"{loop_action.get('time', 0):.1f}s"
-                else:
-                    prev_time = loop_actions[j - 1].get('time', 0)
-                    curr_time = loop_action.get('time', 0)
-                    delay_text = f"{curr_time - prev_time:.1f}s"
+                delay_text = f"{loop_action.get('delay', 0):.1f}s"
 
                 self.action_tree.insert(parent_id, tk.END, iid=f"{parent_id}_{j}", values=(indent + f"{self._GRAB_HANDLE_ICON} {action_text}", delay_text, loop_remark))
 
@@ -1848,9 +1837,7 @@ class AutoTestGUI:
 
     def _format_delay_text(self, index):
         action = self.actions[index]
-        # 如果动作有 display_delay 字段，直接使用它（跟着动作本身）
-        if 'display_delay' in action:
-            return f"{action['display_delay']:.1f}s"
+        # 直接使用 delay 字段（执行前等待时间）
         if action['type'] == 'random_delay':
             return f"{action.get('min_delay', 0):.1f}-{action.get('max_delay', 0):.1f}s"
         if action['type'] == 'multiply_delay':
@@ -1878,8 +1865,8 @@ class AutoTestGUI:
             return f"{action.get('delay', 0):.1f}s"
         if action['type'] == 'delay':
             return f"{action.get('delay', 1.0):.1f}s"
-        relative_delay = self._get_relative_delay(index)
-        return f"{relative_delay:.1f}s" if relative_delay is not None else "-"
+        # 普通动作直接显示 delay 字段
+        return f"{action.get('delay', 0):.1f}s"
 
     def _get_relative_delay(self, index):
         """获取相对延时，使用缓存优化性能"""
@@ -2664,27 +2651,10 @@ class AutoTestGUI:
         elif action_type == 'numeric_loop':
             current_value = float(action.get('interval', 0.5))
         elif action_type == 'variable_input':
-            current_value = float(action.get('time', 0.0))
+            current_value = float(action.get('delay', 0.0))
         elif action_type in ['move', 'click', 'doubleclick', 'input', 'traverse_input', 'keyboard', 'scroll']:
-            if is_loop_action:
-                # 循环组内动作：根据同组内前一个动作计算相对延时
-                if loop_actions is None or child_idx is None:
-                    return
-                if child_idx == 0:
-                    # 组内第一个动作，相对延时就是自己的 time
-                    current_value = float(action.get('time', 0.0))
-                else:
-                    prev_action = loop_actions[child_idx - 1]
-                    curr_time = action.get('time', 0.0)
-                    prev_time = prev_action.get('time', 0.0)
-                    current_value = max(0.0, curr_time - prev_time)
-            else:
-                if index is None:
-                    return
-                relative = self._get_relative_delay(index)
-                if relative is None:
-                    return
-                current_value = float(relative)
+            # 直接使用 delay 字段
+            current_value = float(action.get('delay', 0.0))
         else:
             return
 
@@ -2809,39 +2779,10 @@ class AutoTestGUI:
             elif action_type == 'numeric_loop':
                 action['interval'] = new_value
             elif action_type == 'variable_input':
-                action['time'] = new_value
+                action['delay'] = new_value
             elif action_type in ['move', 'click', 'doubleclick', 'input', 'traverse_input', 'keyboard', 'scroll']:
-                if item_id.startswith('loop_') or item_id.startswith('input_loop_'):
-                    # 循环组内的动作：需要计算绝对时间
-                    parent_info = self._get_parent_loop_info(item_id)
-                    if parent_info:
-                        loop_actions = parent_info['loop_actions']
-                        child_idx = parent_info['child_idx']
-
-                        # 计算前一个动作的绝对时间
-                        if child_idx > 0:
-                            prev_time = loop_actions[child_idx - 1].get('time', 0)
-                        else:
-                            prev_time = 0
-
-                        old_time = action.get('time', 0)
-                        new_absolute_time = prev_time + new_value
-                        delta = new_absolute_time - old_time
-                        action['time'] = new_absolute_time
-
-                        # 调整后续动作的时间
-                        for i in range(child_idx + 1, len(loop_actions)):
-                            loop_actions[i]['time'] = loop_actions[i].get('time', 0) + delta
-                    else:
-                        return
-                elif index is not None:
-                    prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
-                    old_time = action.get('time', 0)
-                    new_absolute_time = prev_time + new_value
-                    delta = new_absolute_time - old_time
-                    action['time'] = new_absolute_time
-                    self._shift_action_times(index + 1, delta)
-                    self._invalidate_relative_delay_cache()
+                # 直接更新 delay 字段
+                action['delay'] = new_value
             else:
                 return
 
@@ -3022,6 +2963,15 @@ class AutoTestGUI:
                 selection = self._get_selected_indices()
                 has_loop_inner = any(isinstance(s, tuple) and s[0] == 'loop' for s in selection)
 
+                # 直接使用用户设置的延时值
+                action = {
+                    'type': 'click',
+                    'x': target_x,
+                    'y': target_y,
+                    'button': 'left',
+                    'delay': delay_var.get()
+                }
+
                 if has_loop_inner:
                     # 选择的是循环组内的动作 - 先获取索引信息
                     for s in selection:
@@ -3032,22 +2982,8 @@ class AutoTestGUI:
                     parent_action = self.actions[parent_loop_idx]
                     loop_actions = parent_action.setdefault('loop_actions', [])
 
-                    # 计算新动作的绝对时间 = 前一个动作的time + 相对延时（循环组内）
-                    new_time = delay_var.get()
-                    if child_idx > 0 and 'time' in loop_actions[child_idx - 1]:
-                        new_time = loop_actions[child_idx - 1].get('time', 0) + delay_var.get()
-
                     insert_child_pos = child_idx + 1
-                    action = {
-                        'type': 'click',
-                        'x': target_x,
-                        'y': target_y,
-                        'button': 'left',
-                        'time': new_time
-                    }
                     loop_actions.insert(insert_child_pos, action)
-                    # 调整循环组内后续动作的time，保持相对延时不变
-                    self._shift_loop_action_times(loop_actions, insert_child_pos + 1, delay_var.get())
                     self._update_action_list(select_index=parent_loop_idx)
                 else:
                     # 普通选择 - 先获取索引信息
@@ -3057,22 +2993,7 @@ class AutoTestGUI:
                     else:
                         insert_pos = len(self.actions)
 
-                    # 计算新动作的绝对时间 = 前一个动作的time + 相对延时（顶层）
-                    new_time = delay_var.get()
-                    if insert_pos > 0 and 'time' in self.actions[insert_pos - 1]:
-                        new_time = self.actions[insert_pos - 1].get('time', 0) + delay_var.get()
-
-                    action = {
-                        'type': 'click',
-                        'x': target_x,
-                        'y': target_y,
-                        'button': 'left',
-                        'time': new_time
-                    }
                     self.actions.insert(insert_pos, action)
-                    # 调整后续动作的time，保持相对延时不变
-                    self._shift_action_times(insert_pos + 1, delay_var.get())
-                    self._invalidate_relative_delay_cache()
                     self._update_action_list(select_index=insert_pos)
 
                 self.in_dialog_operation = False
@@ -3350,6 +3271,7 @@ class AutoTestGUI:
                     'step': step if traverse_type == "sequence" else None,
                     'template': seq_template if traverse_type == "sequence" else None,
                     'fixed_text': fixed_text if traverse_type == "fixed_text" else None,
+                    'delay': 0.5,  # 直接设置延时
                     'remark': ''
                 }
 
@@ -3374,8 +3296,6 @@ class AutoTestGUI:
                     insert_child_pos = child_idx + 1
                     loop_actions.insert(insert_child_pos, action)
 
-                    # 调整循环组内后续动作的time，保持相对延时不变
-                    self._shift_loop_action_times(loop_actions, insert_child_pos + 1, 0.5)
                     # 更新循环组内的延时
                     self._update_action_list(select_index=parent_loop_idx)
                 else:
@@ -3387,16 +3307,7 @@ class AutoTestGUI:
                     else:
                         insert_pos = len(self.actions)
 
-                    # 计算新动作的绝对时间 = 前一个动作的time + 相对延时(默认0.5)
-                    if insert_pos > 0 and 'time' in self.actions[insert_pos - 1]:
-                        action['time'] = self.actions[insert_pos - 1].get('time', 0) + 0.5
-                    elif self.actions:
-                        action['time'] = self.actions[-1].get('time', 0) + 0.5
-
                     self.actions.insert(insert_pos, action)
-                    # 调整后续动作的time，保持相对延时不变
-                    self._shift_action_times(insert_pos + 1, 0.5)
-                    self._invalidate_relative_delay_cache()
                     self._update_action_list(scroll_to_end=True)
 
                 self.in_dialog_operation = False
@@ -3521,8 +3432,7 @@ class AutoTestGUI:
 
                     action = {
                         'type': 'delay',
-                        'delay': delay,
-                        'time': 0
+                        'delay': delay
                     }
                 elif delay_type == "random":
                     min_delay = float(min_entry.get())
@@ -3533,8 +3443,7 @@ class AutoTestGUI:
                     action = {
                         'type': 'random_delay',
                         'min_delay': min_delay,
-                        'max_delay': max_delay,
-                        'time': 0
+                        'max_delay': max_delay
                     }
                 elif delay_type == "multiply":
                     base_delay = float(base_entry.get())
@@ -3543,8 +3452,7 @@ class AutoTestGUI:
 
                     action = {
                         'type': 'multiply_delay',
-                        'base_delay': base_delay,
-                        'time': 0
+                        'base_delay': base_delay
                     }
                 else:  # arithmetic
                     start_delay = float(arithmetic_start_var.get())
@@ -3555,8 +3463,7 @@ class AutoTestGUI:
                     action = {
                         'type': 'arithmetic_delay',
                         'start_delay': start_delay,
-                        'step_delay': step_delay,
-                        'time': 0
+                        'step_delay': step_delay
                     }
 
                 # 获取当前选中项
@@ -3576,33 +3483,10 @@ class AutoTestGUI:
                     parent_action = self.actions[parent_loop_idx]
                     loop_actions = parent_action.setdefault('loop_actions', [])
 
-                    # 在循环组内选中动作之后插入的位置
+                    # 在循环组内选中动作之后插入
                     insert_child_pos = child_idx + 1
-
-                    # 计算新动作的time（基于前一个动作）
-                    if insert_child_pos > 0 and insert_child_pos <= len(loop_actions) and 'time' in loop_actions[insert_child_pos - 1]:
-                        prev_time = loop_actions[insert_child_pos - 1].get('time', 0)
-                        if delay_type == "fixed":
-                            action['time'] = prev_time + action.get('delay', 0)
-                        elif delay_type == "random":
-                            action['time'] = prev_time + action.get('min_delay', 0)
-                        elif delay_type == "multiply":
-                            action['time'] = prev_time + action.get('base_delay', 0)
-                        else:  # arithmetic
-                            action['time'] = prev_time + action.get('start_delay', 0)
-
                     loop_actions.insert(insert_child_pos, action)
 
-                    # 调整循环组内后续动作的time，保持相对延时不变
-                    if delay_type == "fixed":
-                        shift = action.get('delay', 0)
-                    elif delay_type == "random":
-                        shift = action.get('min_delay', 0)
-                    elif delay_type == "multiply":
-                        shift = action.get('base_delay', 0)
-                    else:  # arithmetic
-                        shift = action.get('start_delay', 0)
-                    self._shift_loop_action_times(loop_actions, insert_child_pos + 1, shift)
                     # 更新循环组内的延时
                     self._update_action_list(select_index=parent_loop_idx)
                 else:
@@ -3615,29 +3499,7 @@ class AutoTestGUI:
                     else:
                         insert_pos = len(self.actions)
 
-                    if insert_pos > 0 and self.actions:
-                        prev_time = self.actions[insert_pos - 1].get('time', 0)
-                        # 根据延时类型计算新动作的time
-                        if delay_type == "fixed":
-                            action['time'] = prev_time + action.get('delay', 0)
-                        elif delay_type == "random":
-                            action['time'] = prev_time + action.get('min_delay', 0)
-                        elif delay_type == "multiply":
-                            action['time'] = prev_time + action.get('base_delay', 0)
-                        else:  # arithmetic
-                            action['time'] = prev_time + action.get('start_delay', 0)
-
                     self.actions.insert(insert_pos, action)
-                    # 调整后续动作的time
-                    if delay_type == "fixed":
-                        shift = action.get('delay', 0)
-                    elif delay_type == "random":
-                        shift = action.get('min_delay', 0)
-                    elif delay_type == "multiply":
-                        shift = action.get('base_delay', 0)
-                    else:  # arithmetic
-                        shift = action.get('start_delay', 0)
-                    self._shift_action_times(insert_pos + 1, shift)
                     self._update_action_list(select_index=insert_pos)
 
                 self.in_dialog_operation = False
@@ -5006,11 +4868,7 @@ class AutoTestGUI:
         record_btn.pack(side=tk.LEFT, padx=5)
 
         # 相对延时
-        if 'display_delay' in action:
-            relative_delay = action['display_delay']
-        else:
-            prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
-            relative_delay = round(action.get('time', 0) - prev_time, 1)
+        relative_delay = action.get('delay', 0)
 
         ttk.Label(frame, text="相对延时(秒):").grid(row=2, column=0, padx=5, pady=10, sticky="e")
         delay_var = tk.DoubleVar(value=round(relative_delay, 1))
@@ -5036,15 +4894,7 @@ class AutoTestGUI:
                 # 更新动作
                 action['x'] = target_x
                 action['y'] = target_y
-
-                # 计算新的绝对时间
-                prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
-                new_absolute_time = prev_time + delay_var.get()
-                old_time = action.get('time', 0)
-                delta = new_absolute_time - old_time
-                action['time'] = new_absolute_time
-                action['display_delay'] = delay_var.get()
-                self._shift_action_times(index + 1, delta)
+                action['delay'] = delay_var.get()
 
                 self._update_action_list(select_index=index)
                 self.in_dialog_operation = False
