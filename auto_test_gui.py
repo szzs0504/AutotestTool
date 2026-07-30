@@ -2898,7 +2898,7 @@ class AutoTestGUI:
         if not has_loop_inner:
             int_indices = [s for s in selection if isinstance(s, int)]
             if int_indices:
-                insert_pos = int_indices[-1] + 1
+                insert_pos = int_indices[0]
                 if insert_pos > 0:
                     prev_action = self.actions[insert_pos - 1]
                     # 使用 display_delay（动作列表显示的相对延时）
@@ -3494,8 +3494,8 @@ class AutoTestGUI:
                     int_indices = [s for s in selection if isinstance(s, int)]
 
                     if int_indices:
-                        # 插入到选中项之后
-                        insert_pos = int_indices[-1] + 1
+                        # 插入到选中项之前
+                        insert_pos = int_indices[0]
                     else:
                         insert_pos = len(self.actions)
 
@@ -3659,7 +3659,7 @@ class AutoTestGUI:
         if selection and not has_loop_inner:
             int_indices = [s for s in selection if isinstance(s, int)]
             if int_indices:
-                insert_pos = int_indices[-1] + 1
+                insert_pos = int_indices[0]
             else:
                 insert_pos = len(self.actions)
         else:
