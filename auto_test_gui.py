@@ -2982,14 +2982,14 @@ class AutoTestGUI:
                     parent_action = self.actions[parent_loop_idx]
                     loop_actions = parent_action.setdefault('loop_actions', [])
 
-                    insert_child_pos = child_idx + 1
+                    insert_child_pos = child_idx
                     loop_actions.insert(insert_child_pos, action)
                     self._update_action_list(select_index=parent_loop_idx)
                 else:
                     # 普通选择 - 先获取索引信息
                     int_indices = [s for s in selection if isinstance(s, int)]
                     if int_indices:
-                        insert_pos = int_indices[-1] + 1
+                        insert_pos = int_indices[0]
                     else:
                         insert_pos = len(self.actions)
 
@@ -3292,8 +3292,8 @@ class AutoTestGUI:
                     parent_action = self.actions[parent_loop_idx]
                     loop_actions = parent_action.setdefault('loop_actions', [])
 
-                    # 在循环组内选中动作之后插入
-                    insert_child_pos = child_idx + 1
+                    # 在循环组内选中动作之前插入
+                    insert_child_pos = child_idx
                     loop_actions.insert(insert_child_pos, action)
 
                     # 更新循环组内的延时
@@ -3303,7 +3303,7 @@ class AutoTestGUI:
                     int_indices = [s for s in selection if isinstance(s, int)]
 
                     if int_indices:
-                        insert_pos = int_indices[-1] + 1
+                        insert_pos = int_indices[0]
                     else:
                         insert_pos = len(self.actions)
 
@@ -3483,8 +3483,8 @@ class AutoTestGUI:
                     parent_action = self.actions[parent_loop_idx]
                     loop_actions = parent_action.setdefault('loop_actions', [])
 
-                    # 在循环组内选中动作之后插入
-                    insert_child_pos = child_idx + 1
+                    # 在循环组内选中动作之前插入
+                    insert_child_pos = child_idx
                     loop_actions.insert(insert_child_pos, action)
 
                     # 更新循环组内的延时
