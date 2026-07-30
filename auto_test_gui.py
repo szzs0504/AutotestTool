@@ -2490,6 +2490,73 @@ class AutoTestGUI:
                 return self.actions[idx]
         return None
 
+    def _get_parent_loop_info(self, row_id):
+        """获取循环组内动作的父循环组信息
+
+        返回 {'loop_actions': [...], 'child_idx': int} 或 None
+        """
+        if row_id.startswith('input_loop_'):
+            parts = row_id.split('_')[2:]
+            if not parts:
+                return None
+            idx = int(parts[0])
+            if idx >= len(self.actions):
+                return None
+            action = self.actions[idx]
+            if action.get('type') != 'input_loop':
+                return None
+            # 逐层往下找
+            for i in range(1, len(parts)):
+                child_idx = int(parts[i])
+                loop_actions = action.get('loop_actions', [])
+                if child_idx >= len(loop_actions):
+                    return None
+                action = loop_actions[child_idx]
+            # 找到动作后，获取父级loop_actions
+            if len(parts) >= 2:
+                # 有父级
+                parent_parts = parts[:-1]
+                parent_action = self.actions[int(parent_parts[0])]
+                for j in range(1, len(parent_parts)):
+                    parent_action = parent_action.get('loop_actions', [])[int(parent_parts[j])]
+                loop_actions = parent_action.get('loop_actions', [])
+                child_idx = int(parts[-1])
+                return {'loop_actions': loop_actions, 'child_idx': child_idx}
+            else:
+                # 顶层input_loop的直接子动作
+                return {'loop_actions': action.get('loop_actions', []), 'child_idx': int(parts[-1])}
+        elif row_id.startswith('loop_'):
+            parts = row_id.split('_')[1:]
+            if not parts:
+                return None
+            idx = int(parts[0])
+            if idx >= len(self.actions):
+                return None
+            action = self.actions[idx]
+            if action.get('type') != 'loop_group':
+                return None
+            # 逐层往下找
+            for i in range(1, len(parts)):
+                child_idx = int(parts[i])
+                loop_actions = action.get('loop_actions', [])
+                if child_idx >= len(loop_actions):
+                    return None
+                action = loop_actions[child_idx]
+            # 找到动作后，获取父级loop_actions
+            if len(parts) >= 2:
+                # 有父级
+                parent_parts = parts[:-1]
+                parent_action = self.actions[int(parent_parts[0])]
+                for j in range(1, len(parent_parts)):
+                    parent_action = parent_action.get('loop_actions', [])[int(parent_parts[j])]
+                loop_actions = parent_action.get('loop_actions', [])
+                child_idx = int(parts[-1])
+                return {'loop_actions': loop_actions, 'child_idx': child_idx}
+            else:
+                # 顶层loop_group的直接子动作
+                return {'loop_actions': action.get('loop_actions', []), 'child_idx': int(parts[-1])}
+        return None
+
     def _show_inline_remark_editor(self, row_id, action):
         """显示内联备注编辑器"""
         self._hide_delay_spinbox()
@@ -2534,11 +2601,21 @@ class AutoTestGUI:
         # 检查是否是循环组内的动作
         action = None
         index = None
+        is_loop_action = False
+        loop_actions = None
+        child_idx = None
+
         if item_id.startswith('loop_') or item_id.startswith('input_loop_'):
             # 获取循环组内的动作
             action = self._get_action_by_row_id(item_id)
             if not action:
                 return
+            is_loop_action = True
+            # 获取同组内的动作列表和索引，用于计算相对延时
+            parent_info = self._get_parent_loop_info(item_id)
+            if parent_info:
+                loop_actions = parent_info['loop_actions']
+                child_idx = parent_info['child_idx']
         else:
             try:
                 index = int(item_id)
@@ -2589,12 +2666,25 @@ class AutoTestGUI:
         elif action_type == 'variable_input':
             current_value = float(action.get('time', 0.0))
         elif action_type in ['move', 'click', 'doubleclick', 'input', 'traverse_input', 'keyboard', 'scroll']:
-            if index is None:
-                return
-            relative = self._get_relative_delay(index)
-            if relative is None:
-                return
-            current_value = float(relative)
+            if is_loop_action:
+                # 循环组内动作：根据同组内前一个动作计算相对延时
+                if loop_actions is None or child_idx is None:
+                    return
+                if child_idx == 0:
+                    # 组内第一个动作，相对延时就是自己的 time
+                    current_value = float(action.get('time', 0.0))
+                else:
+                    prev_action = loop_actions[child_idx - 1]
+                    curr_time = action.get('time', 0.0)
+                    prev_time = prev_action.get('time', 0.0)
+                    current_value = max(0.0, curr_time - prev_time)
+            else:
+                if index is None:
+                    return
+                relative = self._get_relative_delay(index)
+                if relative is None:
+                    return
+                current_value = float(relative)
         else:
             return
 
@@ -2608,7 +2698,7 @@ class AutoTestGUI:
 
         self._hide_delay_spinbox()
         x, y, width, height = bbox
-        self.delay_spinbox_var.set(round(current_value, 3))
+        self.delay_spinbox_var.set(round(current_value, 1))
         self.delay_spinbox = ttk.Spinbox(
             self.action_tree,
             from_=0.0,
@@ -2723,12 +2813,10 @@ class AutoTestGUI:
             elif action_type in ['move', 'click', 'doubleclick', 'input', 'traverse_input', 'keyboard', 'scroll']:
                 if item_id.startswith('loop_') or item_id.startswith('input_loop_'):
                     # 循环组内的动作：需要计算绝对时间
-                    parts = item_id.split('_')
-                    if len(parts) >= 3:
-                        parent_idx = int(parts[1])
-                        child_idx = int(parts[2])
-                        parent_action = self.actions[parent_idx]
-                        loop_actions = parent_action.setdefault('loop_actions', [])
+                    parent_info = self._get_parent_loop_info(item_id)
+                    if parent_info:
+                        loop_actions = parent_info['loop_actions']
+                        child_idx = parent_info['child_idx']
 
                         # 计算前一个动作的绝对时间
                         if child_idx > 0:
@@ -2744,6 +2832,8 @@ class AutoTestGUI:
                         # 调整后续动作的时间
                         for i in range(child_idx + 1, len(loop_actions)):
                             loop_actions[i]['time'] = loop_actions[i].get('time', 0) + delta
+                    else:
+                        return
                 elif index is not None:
                     prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
                     old_time = action.get('time', 0)
@@ -2909,8 +2999,8 @@ class AutoTestGUI:
 
         # 相对延时
         ttk.Label(frame, text="相对延时(秒):").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        delay_var = tk.DoubleVar(value=relative_delay)
-        ttk.Entry(frame, width=15, textvariable=delay_var).grid(row=1, column=1, padx=5, pady=5, sticky="w")
+        delay_var = tk.DoubleVar(value=round(relative_delay, 1))
+        ttk.Spinbox(frame, width=13, textvariable=delay_var, from_=0, to=999, increment=0.1, state='normal').grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
         # 状态标签
         status_label = ttk.Label(frame, text="", foreground="blue")
@@ -3014,7 +3104,7 @@ class AutoTestGUI:
         # 延时设置
         ttk.Label(frame, text="延时(秒)：").grid(row=2, column=0, padx=5, pady=10, sticky="e")
         delay_var = tk.DoubleVar(value=0.5)
-        ttk.Entry(frame, width=15, textvariable=delay_var).grid(row=2, column=1, padx=5, pady=10, sticky="w")
+        ttk.Spinbox(frame, width=13, textvariable=delay_var, from_=0, to=999, increment=0.1, state='normal').grid(row=2, column=1, padx=5, pady=10, sticky="w")
 
         def confirm():
             try:
@@ -4838,12 +4928,15 @@ class AutoTestGUI:
         record_btn.pack(side=tk.LEFT, padx=5)
 
         # 相对延时
-        prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
-        relative_delay = action.get('time', 0) - prev_time
+        if 'display_delay' in action:
+            relative_delay = action['display_delay']
+        else:
+            prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
+            relative_delay = round(action.get('time', 0) - prev_time, 1)
 
         ttk.Label(frame, text="相对延时(秒):").grid(row=2, column=0, padx=5, pady=10, sticky="e")
-        delay_var = tk.DoubleVar(value=relative_delay)
-        ttk.Entry(frame, width=15, textvariable=delay_var).grid(row=2, column=1, padx=5, pady=10, sticky="w")
+        delay_var = tk.DoubleVar(value=round(relative_delay, 1))
+        ttk.Spinbox(frame, width=13, textvariable=delay_var, from_=0, to=999, increment=0.1, state='normal').grid(row=2, column=1, padx=5, pady=10, sticky="w")
 
         # 状态标签
         status_label = ttk.Label(frame, text="", foreground="blue")
@@ -4872,6 +4965,7 @@ class AutoTestGUI:
                 old_time = action.get('time', 0)
                 delta = new_absolute_time - old_time
                 action['time'] = new_absolute_time
+                action['display_delay'] = delay_var.get()
                 self._shift_action_times(index + 1, delta)
 
                 self._update_action_list(select_index=index)
@@ -4927,12 +5021,15 @@ class AutoTestGUI:
         record_btn.pack(side=tk.LEFT, padx=5)
 
         # 相对延时
-        prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
-        relative_delay = action.get('time', 0) - prev_time
+        if 'display_delay' in action:
+            relative_delay = action['display_delay']
+        else:
+            prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
+            relative_delay = round(action.get('time', 0) - prev_time, 1)
 
         ttk.Label(frame, text="相对延时(秒):").grid(row=2, column=0, padx=5, pady=10, sticky="e")
-        delay_var = tk.DoubleVar(value=relative_delay)
-        ttk.Entry(frame, width=15, textvariable=delay_var).grid(row=2, column=1, padx=5, pady=10, sticky="w")
+        delay_var = tk.DoubleVar(value=round(relative_delay, 1))
+        ttk.Spinbox(frame, width=13, textvariable=delay_var, from_=0, to=999, increment=0.1, state='normal').grid(row=2, column=1, padx=5, pady=10, sticky="w")
 
         # 状态标签
         status_label = ttk.Label(frame, text="", foreground="blue")
@@ -4965,6 +5062,7 @@ class AutoTestGUI:
                 old_time = action.get('time', 0)
                 delta = new_absolute_time - old_time
                 action['time'] = new_absolute_time
+                action['display_delay'] = delay_var.get()
                 self._shift_action_times(index + 1, delta)
 
                 self._update_action_list(select_index=index)
@@ -5101,12 +5199,15 @@ class AutoTestGUI:
         record_btn.config(command=start_record)
 
         # 相对延时
-        prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
-        relative_delay = action.get('time', 0) - prev_time
+        if 'display_delay' in action:
+            relative_delay = action['display_delay']
+        else:
+            prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
+            relative_delay = round(action.get('time', 0) - prev_time, 1)
 
         ttk.Label(main_frame, text="相对延时(秒):").grid(row=3, column=0, padx=5, pady=5, sticky="e")
-        delay_var = tk.DoubleVar(value=relative_delay)
-        ttk.Entry(main_frame, width=15, textvariable=delay_var).grid(row=3, column=1, padx=5, pady=5, sticky="w")
+        delay_var = tk.DoubleVar(value=round(relative_delay, 1))
+        ttk.Spinbox(main_frame, width=13, textvariable=delay_var, from_=0, to=999, increment=0.1, state='normal').grid(row=3, column=1, padx=5, pady=5, sticky="w")
 
         # 按钮区域
         btn_frame = ttk.Frame(main_frame)
@@ -5153,6 +5254,7 @@ class AutoTestGUI:
                 old_time = action.get('time', 0)
                 delta = new_absolute_time - old_time
                 action['time'] = new_absolute_time
+                action['display_delay'] = delay_var.get()
                 self._shift_action_times(index + 1, delta)
 
                 self._update_action_list(select_index=index)
@@ -5726,12 +5828,15 @@ class AutoTestGUI:
         record_btn.pack(side=tk.LEFT, padx=5)
 
         # 相对延时
-        prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
-        relative_delay = action.get('time', 0) - prev_time
+        if 'display_delay' in action:
+            relative_delay = action['display_delay']
+        else:
+            prev_time = self.actions[index - 1].get('time', 0) if index > 0 else 0
+            relative_delay = round(action.get('time', 0) - prev_time, 1)
 
         ttk.Label(frame, text="相对延时(秒):").grid(row=4, column=0, padx=5, pady=10, sticky="e")
-        delay_var = tk.DoubleVar(value=relative_delay)
-        ttk.Entry(frame, width=15, textvariable=delay_var).grid(row=4, column=1, padx=5, pady=10, sticky="w")
+        delay_var = tk.DoubleVar(value=round(relative_delay, 1))
+        ttk.Spinbox(frame, width=13, textvariable=delay_var, from_=0, to=999, increment=0.1, state='normal').grid(row=4, column=1, padx=5, pady=10, sticky="w")
 
         # 清空文本选项
         clear_text_var = tk.BooleanVar(value=action.get('clear_text', True))
@@ -5815,6 +5920,7 @@ class AutoTestGUI:
                 old_time = action.get('time', 0)
                 delta = new_absolute_time - old_time
                 action['time'] = new_absolute_time
+                action['display_delay'] = delay_var.get()
                 self._shift_action_times(index + 1, delta)
 
                 self._update_action_list(select_index=index)
@@ -5870,10 +5976,27 @@ class AutoTestGUI:
         record_btn = ttk.Button(pos_frame, text="录制")
         record_btn.pack(side=tk.LEFT, padx=5)
 
-        # 相对延时
+        # 相对延时 - 使用 display_delay（如果存在），否则计算
+        if 'display_delay' in action:
+            relative_delay = round(action['display_delay'], 1)
+        else:
+            parts = row_id.split('_')
+            if len(parts) >= 3:
+                parent_idx = int(parts[1])
+                child_idx = int(parts[2])
+                parent_action = self.actions[parent_idx]
+                loop_actions = parent_action.get('loop_actions', [])
+                if child_idx > 0 and loop_actions:
+                    prev_time = loop_actions[child_idx - 1].get('time', 0)
+                    curr_time = action.get('time', 0)
+                    relative_delay = round(curr_time - prev_time, 1)
+                else:
+                    relative_delay = round(action.get('time', 0), 1)
+            else:
+                relative_delay = round(action.get('time', 0), 1)
+        delay_var = tk.DoubleVar(value=relative_delay)
         ttk.Label(frame, text="相对延时(秒):").grid(row=2, column=0, padx=5, pady=10, sticky="e")
-        delay_var = tk.DoubleVar(value=action.get('time', 0))
-        ttk.Entry(frame, width=15, textvariable=delay_var).grid(row=2, column=1, padx=5, pady=10, sticky="w")
+        ttk.Spinbox(frame, width=13, textvariable=delay_var, from_=0, to=999, increment=0.1, state='normal').grid(row=2, column=1, padx=5, pady=10, sticky="w")
 
         # 状态标签
         status_label = ttk.Label(frame, text="", foreground="blue")
@@ -5926,7 +6049,20 @@ class AutoTestGUI:
                 # 更新动作
                 action['x'] = target_x
                 action['y'] = target_y
-                action['time'] = delay_var.get()
+                # 计算新的绝对时间：prev_time + 相对延时
+                parts = row_id.split('_')
+                if len(parts) >= 3:
+                    parent_idx = int(parts[1])
+                    child_idx = int(parts[2])
+                    parent_action = self.actions[parent_idx]
+                    loop_actions = parent_action.get('loop_actions', [])
+                    if child_idx > 0 and loop_actions:
+                        prev_time = loop_actions[child_idx - 1].get('time', 0)
+                    else:
+                        prev_time = 0
+                else:
+                    prev_time = 0
+                action['time'] = prev_time + delay_var.get()
 
                 # 刷新列表
                 self._update_action_list()
@@ -5990,10 +6126,24 @@ class AutoTestGUI:
         record_btn = ttk.Button(pos_frame, text="录制")
         record_btn.pack(side=tk.LEFT, padx=5)
 
-        # 相对延时
+        # 相对延时 - 计算相对于前一个动作的延时
+        parts = row_id.split('_')
+        if len(parts) >= 3:
+            parent_idx = int(parts[1])
+            child_idx = int(parts[2])
+            parent_action = self.actions[parent_idx]
+            loop_actions = parent_action.get('loop_actions', [])
+            if child_idx > 0 and loop_actions:
+                prev_time = loop_actions[child_idx - 1].get('time', 0)
+                curr_time = action.get('time', 0)
+                relative_delay = round(curr_time - prev_time, 1)
+            else:
+                relative_delay = round(action.get('time', 0), 1)
+        else:
+            relative_delay = round(action.get('time', 0), 1)
+        delay_var = tk.DoubleVar(value=round(relative_delay, 1))
         ttk.Label(frame, text="相对延时(秒):").grid(row=4, column=0, padx=5, pady=10, sticky="e")
-        delay_var = tk.DoubleVar(value=action.get('time', 0))
-        ttk.Entry(frame, width=15, textvariable=delay_var).grid(row=4, column=1, padx=5, pady=10, sticky="w")
+        ttk.Spinbox(frame, width=13, textvariable=delay_var, from_=0, to=999, increment=0.1, state='normal').grid(row=4, column=1, padx=5, pady=10, sticky="w")
 
         # 清空文本选项
         clear_text_var = tk.BooleanVar(value=action.get('clear_text', True))
@@ -6070,7 +6220,20 @@ class AutoTestGUI:
                 action['x'] = target_x
                 action['y'] = target_y
                 action['clear_text'] = clear_text_var.get()
-                action['time'] = delay_var.get()
+                # 计算新的绝对时间：prev_time + 相对延时
+                parts = row_id.split('_')
+                if len(parts) >= 3:
+                    parent_idx = int(parts[1])
+                    child_idx = int(parts[2])
+                    parent_action = self.actions[parent_idx]
+                    loop_actions = parent_action.get('loop_actions', [])
+                    if child_idx > 0 and loop_actions:
+                        prev_time = loop_actions[child_idx - 1].get('time', 0)
+                    else:
+                        prev_time = 0
+                else:
+                    prev_time = 0
+                action['time'] = prev_time + delay_var.get()
 
                 self._update_action_list()
                 self.in_dialog_operation = False
@@ -6181,10 +6344,24 @@ class AutoTestGUI:
         current_type = action.get('traverse_type', 'list')
         update_type_ui(current_type)
 
-        # 相对延时
+        # 相对延时 - 计算相对于前一个动作的延时
+        parts = row_id.split('_')
+        if len(parts) >= 3:
+            parent_idx = int(parts[1])
+            child_idx = int(parts[2])
+            parent_action = self.actions[parent_idx]
+            loop_actions = parent_action.get('loop_actions', [])
+            if child_idx > 0 and loop_actions:
+                prev_time = loop_actions[child_idx - 1].get('time', 0)
+                curr_time = action.get('time', 0)
+                relative_delay = round(curr_time - prev_time, 1)
+            else:
+                relative_delay = round(action.get('time', 0), 1)
+        else:
+            relative_delay = round(action.get('time', 0), 1)
+        delay_var = tk.DoubleVar(value=round(relative_delay, 1))
         ttk.Label(main_frame, text="相对延时(秒):").grid(row=3, column=0, padx=5, pady=5, sticky="e")
-        delay_var = tk.DoubleVar(value=action.get('time', 0))
-        ttk.Entry(main_frame, width=15, textvariable=delay_var).grid(row=3, column=1, padx=5, pady=5, sticky="w")
+        ttk.Spinbox(main_frame, width=13, textvariable=delay_var, from_=0, to=999, increment=0.1, state='normal').grid(row=3, column=1, padx=5, pady=5, sticky="w")
 
         # 按钮区域
         btn_frame = ttk.Frame(main_frame)
@@ -6246,7 +6423,20 @@ class AutoTestGUI:
                 action['step'] = step if traverse_type == "sequence" else None
                 action['template'] = seq_template if traverse_type == "sequence" else None
                 action['fixed_text'] = fixed_text if traverse_type == "fixed_text" else None
-                action['time'] = delay_var.get()
+                # 计算新的绝对时间：prev_time + 相对延时
+                parts = row_id.split('_')
+                if len(parts) >= 3:
+                    parent_idx = int(parts[1])
+                    child_idx = int(parts[2])
+                    parent_action = self.actions[parent_idx]
+                    loop_actions = parent_action.get('loop_actions', [])
+                    if child_idx > 0 and loop_actions:
+                        prev_time = loop_actions[child_idx - 1].get('time', 0)
+                    else:
+                        prev_time = 0
+                else:
+                    prev_time = 0
+                action['time'] = prev_time + delay_var.get()
 
                 self._update_action_list()
                 self.in_dialog_operation = False
@@ -6823,6 +7013,7 @@ class AutoTestGUI:
                             old_time = action.get('time', 0)
                             delta = new_absolute_time - old_time
                             action['time'] = new_absolute_time
+                            action['display_delay'] = new_value
                             self._shift_action_times(index + 1, delta)
                         else:
                             # click, move, doubleclick
@@ -6831,6 +7022,7 @@ class AutoTestGUI:
                             old_time = action.get('time', 0)
                             delta = new_absolute_time - old_time
                             action['time'] = new_absolute_time
+                            action['display_delay'] = new_value
                             self._shift_action_times(index + 1, delta)
 
                         self._update_action_list(select_index=index)
