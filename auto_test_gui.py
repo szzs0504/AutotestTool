@@ -1014,8 +1014,15 @@ class AutoTestGUI:
             delay = action.get('start_delay', 0.5)
             time.sleep(delay)
         elif action_type == 'delay':
-            # 固定延时
-            delay = action.get('delay', 0)
+            # 延时动作
+            delay_mode = action.get('delay_mode', 'fixed')
+            if delay_mode == 'list':
+                # 列表模式：按顺序遍历，循环往复
+                values = action.get('delay_values', [1.0])
+                delay = values[loop_index % len(values)] if values else 0
+            else:
+                # 固定模式
+                delay = action.get('delay', 0)
             if delay > 0:
                 time.sleep(delay)
         elif action_type == 'loop_group':
@@ -1191,27 +1198,19 @@ class AutoTestGUI:
                 if i < len(values) - 1:
                     if interval_mode == 'fixed':
                         actual_interval = loop_interval if isinstance(loop_interval, (int, float)) else 1.0
-                    elif interval_mode == 'range':
-                        # 范围间隔：等差或等比
-                        if isinstance(loop_interval, dict) and loop_interval.get('sub_type') == 'geometric':
-                            # 等比：start * ratio^i
-                            interval_geo_start = loop_interval.get('start', 1.0)
-                            interval_ratio = loop_interval.get('ratio', 1.5)
-                            interval_steps = loop_interval.get('steps', 10)
-                            actual_interval = interval_geo_start * (interval_ratio ** i)
-                            if i >= interval_steps:
-                                actual_interval = interval_geo_start * (interval_ratio ** interval_steps)
-                        else:
-                            # 等差：start + i * step
-                            interval_start = loop_interval.get('start', 1.0) if isinstance(loop_interval, dict) else 1.0
-                            interval_step = loop_interval.get('step', 0.1) if isinstance(loop_interval, dict) else 0.1
-                            interval_end = loop_interval.get('end', 2.0) if isinstance(loop_interval, dict) else 2.0
-                            actual_interval = interval_start + i * interval_step
-                            if actual_interval > interval_end:
-                                actual_interval = interval_end
+                    elif interval_mode == 'arithmetic':
+                        # 等差：start + i * step
+                        interval_start = loop_interval.get('start', 1.0) if isinstance(loop_interval, dict) else 1.0
+                        interval_step = loop_interval.get('step', 0.1) if isinstance(loop_interval, dict) else 0.1
+                        actual_interval = interval_start + i * interval_step
+                    elif interval_mode == 'geometric':
+                        # 等比：start * ratio^i
+                        interval_geo_start = loop_interval.get('start', 1.0)
+                        interval_ratio = loop_interval.get('ratio', 1.5)
+                        actual_interval = interval_geo_start * (interval_ratio ** i)
                     elif interval_mode == 'list':
                         vals = loop_interval.get('values', [1.0]) if isinstance(loop_interval, dict) else [1.0]
-                        actual_interval = random.choice(vals)
+                        actual_interval = vals[i % len(vals)] if vals else 1.0
                     else:  # random
                         min_val = loop_interval.get('min', 0.5) if isinstance(loop_interval, dict) else 0.5
                         max_val = loop_interval.get('max', 2.0) if isinstance(loop_interval, dict) else 2.0
@@ -1786,13 +1785,10 @@ class AutoTestGUI:
             # 构建间隔描述
             if interval_mode == 'fixed':
                 interval_desc = f"固定{loop_interval}s" if isinstance(loop_interval, (int, float)) else f"固定{loop_interval.get('value', 1.0)}s"
-            elif interval_mode == 'range':
-                if isinstance(loop_interval, dict) and loop_interval.get('sub_type') == 'geometric':
-                    interval_desc = f"等比起始{loop_interval.get('start', 1.0)}系数{loop_interval.get('ratio', 1.5)}步数{loop_interval.get('steps', 10)}"
-                elif isinstance(loop_interval, dict):
-                    interval_desc = f"等差起始{loop_interval.get('start', 1.0)}步距{loop_interval.get('step', 0.1)}上限{loop_interval.get('end', 2.0)}"
-                else:
-                    interval_desc = "等差起始1.0步距0.1上限2.0"
+            elif interval_mode == 'arithmetic':
+                interval_desc = f"等差初始{loop_interval.get('start', 1.0)}系数{loop_interval.get('step', 0.1)}"
+            elif interval_mode == 'geometric':
+                interval_desc = f"等比初始{loop_interval.get('start', 1.0)}系数{loop_interval.get('ratio', 1.5)}"
             elif interval_mode == 'list':
                 values = loop_interval.get('values', []) if isinstance(loop_interval, dict) else []
                 interval_desc = f"列表{values}"
@@ -1857,7 +1853,12 @@ class AutoTestGUI:
             naming = "时间戳" if action.get('naming', 'timestamp') == 'timestamp' else "递增序号"
             return f"截屏: {action.get('filename', 'screenshot')} ({naming})"
         if action_type == 'delay':
-            return f"延时 ({action.get('delay', 1.0):.1f}s)"
+            delay_mode = action.get('delay_mode', 'fixed')
+            if delay_mode == 'list':
+                values = action.get('delay_values', [])
+                return f"延时列表 {values}"
+            else:
+                return f"延时 ({action.get('delay', 1.0):.1f}s)"
         return action_type
 
     def _format_delay_text(self, index):
@@ -2666,7 +2667,9 @@ class AutoTestGUI:
             loop_interval = action.get('loop_interval', 1.0)
             if interval_mode == 'fixed':
                 current_value = float(loop_interval) if isinstance(loop_interval, (int, float)) else 1.0
-            elif interval_mode == 'range':
+            elif interval_mode == 'arithmetic':
+                current_value = float(loop_interval.get('start', 1.0)) if isinstance(loop_interval, dict) else 1.0
+            elif interval_mode == 'geometric':
                 current_value = float(loop_interval.get('start', 1.0)) if isinstance(loop_interval, dict) else 1.0
             elif interval_mode == 'list':
                 values = loop_interval.get('values', [1.0]) if isinstance(loop_interval, dict) else [1.0]
@@ -2780,11 +2783,17 @@ class AutoTestGUI:
                 loop_interval = action.get('loop_interval', 1.0)
                 if interval_mode == 'fixed':
                     action['loop_interval'] = new_value
-                elif interval_mode == 'range':
+                elif interval_mode == 'arithmetic':
                     if isinstance(loop_interval, dict):
                         loop_interval['start'] = new_value
                     else:
-                        loop_interval = {'type': 'range', 'start': new_value, 'step': 0.1, 'end': 2.0}
+                        loop_interval = {'type': 'arithmetic', 'start': new_value, 'step': 0.1}
+                    action['loop_interval'] = loop_interval
+                elif interval_mode == 'geometric':
+                    if isinstance(loop_interval, dict):
+                        loop_interval['start'] = new_value
+                    else:
+                        loop_interval = {'type': 'geometric', 'start': new_value, 'ratio': 1.5}
                     action['loop_interval'] = loop_interval
                 elif interval_mode == 'list':
                     if isinstance(loop_interval, dict):
@@ -3034,7 +3043,7 @@ class AutoTestGUI:
 
         dialog = tk.Toplevel(self.root)
         dialog.title("插入输入")
-        dialog.geometry("500x250")
+        dialog.geometry("575x175")
         dialog.transient(self.root)
         dialog.attributes('-topmost', True)
         dialog.grab_set()
@@ -3379,6 +3388,8 @@ class AutoTestGUI:
                        command=lambda: update_ui("multiply")).pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(type_frame, text="等差递增", variable=type_var, value="arithmetic",
                        command=lambda: update_ui("arithmetic")).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(type_frame, text="列表", variable=type_var, value="list",
+                       command=lambda: update_ui("list")).pack(side=tk.LEFT, padx=2)
 
         # 固定延时参数
         fixed_frame = ttk.Frame(frame)
@@ -3421,27 +3432,45 @@ class AutoTestGUI:
         arithmetic_step_var = tk.DoubleVar(value=0.1)
         ttk.Entry(arithmetic_frame, width=10, textvariable=arithmetic_step_var).grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
+        # 列表延时参数
+        list_frame = ttk.Frame(frame)
+        list_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
+
+        ttk.Label(list_frame, text="延时列表(逗号分隔):").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        list_delay_var = tk.StringVar(value="0.5,1.0,1.5,2.0")
+        ttk.Entry(list_frame, width=25, textvariable=list_delay_var).grid(row=0, column=1, padx=5, pady=5, sticky="w")
+
         def update_ui(delay_type):
             if delay_type == "fixed":
                 fixed_frame.grid()
                 random_frame.grid_remove()
                 exp_frame.grid_remove()
                 arithmetic_frame.grid_remove()
+                list_frame.grid_remove()
             elif delay_type == "random":
                 fixed_frame.grid_remove()
                 random_frame.grid()
                 exp_frame.grid_remove()
                 arithmetic_frame.grid_remove()
+                list_frame.grid_remove()
             elif delay_type == "multiply":
                 fixed_frame.grid_remove()
                 random_frame.grid_remove()
                 exp_frame.grid()
                 arithmetic_frame.grid_remove()
-            else:  # arithmetic
+                list_frame.grid_remove()
+            elif delay_type == "arithmetic":
                 fixed_frame.grid_remove()
                 random_frame.grid_remove()
                 exp_frame.grid_remove()
                 arithmetic_frame.grid()
+                list_frame.grid_remove()
+            else:  # list
+                fixed_frame.grid_remove()
+                random_frame.grid_remove()
+                exp_frame.grid_remove()
+                arithmetic_frame.grid_remove()
+                list_frame.grid()
 
         # 初始化UI状态
         update_ui("fixed")
@@ -3479,7 +3508,7 @@ class AutoTestGUI:
                         'type': 'multiply_delay',
                         'base_delay': base_delay
                     }
-                else:  # arithmetic
+                elif delay_type == "arithmetic":
                     start_delay = float(arithmetic_start_var.get())
                     step_delay = float(arithmetic_step_var.get())
                     if start_delay < 0 or step_delay < 0:
@@ -3490,6 +3519,19 @@ class AutoTestGUI:
                         'start_delay': start_delay,
                         'step_delay': step_delay
                     }
+                elif delay_type == "list":
+                    try:
+                        values = [float(v.strip()) for v in list_delay_var.get().split(',')]
+                        if not values:
+                            raise ValueError("列表不能为空")
+                        action = {
+                            'type': 'delay',
+                            'delay_mode': 'list',
+                            'delay_values': values
+                        }
+                    except ValueError:
+                        messagebox.showerror("错误", "列表格式无效，请使用逗号分隔的数字")
+                        return
 
                 # 获取当前选中项
                 selection = self._get_selected_indices()
@@ -3787,8 +3829,10 @@ class AutoTestGUI:
         mode_frame.grid(row=0, column=1, columnspan=2, sticky="w")
         ttk.Radiobutton(mode_frame, text="固定", variable=interval_mode_var, value="fixed",
                         command=lambda: update_interval_mode_ui("fixed")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(mode_frame, text="范围", variable=interval_mode_var, value="range",
-                        command=lambda: update_interval_mode_ui("range")).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(mode_frame, text="等差", variable=interval_mode_var, value="arithmetic",
+                        command=lambda: update_interval_mode_ui("arithmetic")).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(mode_frame, text="等比", variable=interval_mode_var, value="geometric",
+                        command=lambda: update_interval_mode_ui("geometric")).pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(mode_frame, text="列表", variable=interval_mode_var, value="list",
                         command=lambda: update_interval_mode_ui("list")).pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(mode_frame, text="随机", variable=interval_mode_var, value="random",
@@ -3804,50 +3848,23 @@ class AutoTestGUI:
         interval_var = tk.DoubleVar(value=1.0)
         ttk.Entry(fixed_interval_frame, width=10, textvariable=interval_var).pack(side=tk.LEFT, padx=2)
 
-        # 范围间隔（等差/等比）
-        range_interval_frame = ttk.Frame(interval_params_frame)
-        range_interval_frame.pack_propagate(False)  # 防止框架扩展
-        range_sub_type_var = tk.StringVar(value="arithmetic")  # arithmetic / geometric
-
-        # Radiobutton 放在外层，始终可见
-        ttk.Radiobutton(range_interval_frame, text="等差", variable=range_sub_type_var, value="arithmetic",
-                        command=lambda: update_range_sub_ui()).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(range_interval_frame, text="等比", variable=range_sub_type_var, value="geometric",
-                        command=lambda: update_range_sub_ui()).pack(side=tk.LEFT, padx=2)
-
-        # 等差子模式 - 参数区域
-        arithmetic_frame = ttk.Frame(range_interval_frame)
-        ttk.Label(arithmetic_frame, text="起始:").pack(side=tk.LEFT, padx=2)
+        # 等差间隔
+        arithmetic_interval_frame = ttk.Frame(interval_params_frame)
+        ttk.Label(arithmetic_interval_frame, text="初始值:").pack(side=tk.LEFT, padx=2)
         interval_start_var = tk.DoubleVar(value=1.0)
-        ttk.Entry(arithmetic_frame, width=8, textvariable=interval_start_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(arithmetic_frame, text="步距:").pack(side=tk.LEFT, padx=2)
+        ttk.Entry(arithmetic_interval_frame, width=8, textvariable=interval_start_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(arithmetic_interval_frame, text="等差系数:").pack(side=tk.LEFT, padx=2)
         interval_step_var = tk.DoubleVar(value=0.1)
-        ttk.Entry(arithmetic_frame, width=8, textvariable=interval_step_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(arithmetic_frame, text="上限:").pack(side=tk.LEFT, padx=2)
-        interval_end_var = tk.DoubleVar(value=2.0)
-        ttk.Entry(arithmetic_frame, width=8, textvariable=interval_end_var).pack(side=tk.LEFT, padx=2)
+        ttk.Entry(arithmetic_interval_frame, width=8, textvariable=interval_step_var).pack(side=tk.LEFT, padx=2)
 
-        # 等比子模式 - 参数区域
-        geometric_frame = ttk.Frame(range_interval_frame)
-        ttk.Label(geometric_frame, text="起始:").pack(side=tk.LEFT, padx=2)
+        # 等比间隔
+        geometric_interval_frame = ttk.Frame(interval_params_frame)
+        ttk.Label(geometric_interval_frame, text="初始值:").pack(side=tk.LEFT, padx=2)
         interval_geo_start_var = tk.DoubleVar(value=1.0)
-        ttk.Entry(geometric_frame, width=8, textvariable=interval_geo_start_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(geometric_frame, text="等比系数:").pack(side=tk.LEFT, padx=2)
+        ttk.Entry(geometric_interval_frame, width=8, textvariable=interval_geo_start_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(geometric_interval_frame, text="等比系数:").pack(side=tk.LEFT, padx=2)
         interval_ratio_var = tk.DoubleVar(value=1.5)
-        ttk.Entry(geometric_frame, width=8, textvariable=interval_ratio_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(geometric_frame, text="步数:").pack(side=tk.LEFT, padx=2)
-        interval_steps_var = tk.IntVar(value=10)
-        ttk.Entry(geometric_frame, width=8, textvariable=interval_steps_var).pack(side=tk.LEFT, padx=2)
-
-        def update_range_sub_ui():
-            arithmetic_frame.pack_forget()
-            geometric_frame.pack_forget()
-            if range_sub_type_var.get() == "arithmetic":
-                arithmetic_frame.pack(side=tk.LEFT, padx=2, anchor="w")
-            else:
-                geometric_frame.pack(side=tk.LEFT, padx=2, anchor="w")
-
-        update_range_sub_ui()
+        ttk.Entry(geometric_interval_frame, width=8, textvariable=interval_ratio_var).pack(side=tk.LEFT, padx=2)
 
         # 列表间隔
         list_interval_frame = ttk.Frame(interval_params_frame)
@@ -3866,14 +3883,16 @@ class AutoTestGUI:
 
         def update_interval_mode_ui(mode):
             fixed_interval_frame.pack_forget()
-            range_interval_frame.pack_forget()
+            arithmetic_interval_frame.pack_forget()
+            geometric_interval_frame.pack_forget()
             list_interval_frame.pack_forget()
             random_interval_frame.pack_forget()
             if mode == "fixed":
                 fixed_interval_frame.pack(side=tk.LEFT, padx=2, anchor="w")
-            elif mode == "range":
-                range_interval_frame.pack(side=tk.LEFT, padx=2, anchor="w")
-                update_range_sub_ui()
+            elif mode == "arithmetic":
+                arithmetic_interval_frame.pack(side=tk.LEFT, padx=2, anchor="w")
+            elif mode == "geometric":
+                geometric_interval_frame.pack(side=tk.LEFT, padx=2, anchor="w")
             elif mode == "list":
                 list_interval_frame.pack(side=tk.LEFT, padx=2, anchor="w")
             else:  # random
@@ -4553,10 +4572,10 @@ class AutoTestGUI:
             record_btn_widget.config(command=stop_recording_and_close)
 
         def insert_delay():
-            """插入固定延时 - 弹出配置对话框"""
+            """插入延时 - 弹出配置对话框"""
             delay_dialog = tk.Toplevel(dialog)
             delay_dialog.title("延时设置")
-            delay_dialog.geometry("250x120")
+            delay_dialog.geometry("300x180")
             delay_dialog.transient(dialog)
             delay_dialog.attributes('-topmost', True)
             delay_dialog.grab_set()
@@ -4569,28 +4588,75 @@ class AutoTestGUI:
             main_frame_d = ttk.Frame(delay_dialog, padding="10")
             main_frame_d.pack(fill=tk.BOTH, expand=True)
 
-            ttk.Label(main_frame_d, text="延时时间(秒):").pack(pady=5)
+            # 延时类型选择
+            delay_type_var = tk.StringVar(value="fixed")
+            ttk.Label(main_frame_d, text="延时类型:").pack(pady=5)
+            type_frame = ttk.Frame(main_frame_d)
+            type_frame.pack(pady=5)
+            ttk.Radiobutton(type_frame, text="固定", variable=delay_type_var, value="fixed",
+                            command=lambda: update_delay_ui("fixed")).pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(type_frame, text="列表", variable=delay_type_var, value="list",
+                            command=lambda: update_delay_ui("list")).pack(side=tk.LEFT, padx=5)
+
+            # 参数框架
+            params_frame = ttk.Frame(main_frame_d)
+            params_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+            # 固定延时
+            fixed_frame = ttk.Frame(params_frame)
+            ttk.Label(fixed_frame, text="延时时间(秒):").pack(side=tk.LEFT, padx=5)
             delay_var = tk.DoubleVar(value=1.0)
-            delay_entry = ttk.Entry(main_frame_d, textvariable=delay_var, width=10)
-            delay_entry.pack(pady=5)
-            delay_entry.focus_set()
+            ttk.Entry(fixed_frame, textvariable=delay_var, width=10).pack(side=tk.LEFT, padx=5)
+
+            # 列表延时
+            list_frame = ttk.Frame(params_frame)
+            ttk.Label(list_frame, text="延时列表(逗号分隔):").pack(side=tk.LEFT, padx=5)
+            list_var = tk.StringVar(value="0.5,1.0,1.5,2.0")
+            ttk.Entry(list_frame, textvariable=list_var, width=20).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+
+            def update_delay_ui(delay_type):
+                fixed_frame.pack_forget()
+                list_frame.pack_forget()
+                if delay_type == "fixed":
+                    fixed_frame.pack(pady=10)
+                else:
+                    list_frame.pack(pady=10, fill=tk.BOTH, expand=True)
+
+            update_delay_ui("fixed")
 
             def confirm_delay():
-                delay_action = {
-                    'type': 'delay',
-                    'delay': delay_var.get()
-                }
-                loop_actions.append(delay_action)
-                refresh_actions_list()
-                edit_status_label.config(text=f"已插入延时 ({delay_var.get()}秒)", foreground="green")
+                delay_type = delay_type_var.get()
+                if delay_type == "fixed":
+                    delay_action = {
+                        'type': 'delay',
+                        'delay': delay_var.get()
+                    }
+                    loop_actions.append(delay_action)
+                    refresh_actions_list()
+                    edit_status_label.config(text=f"已插入固定延时 ({delay_var.get()}秒)", foreground="green")
+                else:
+                    try:
+                        values = [float(v.strip()) for v in list_var.get().split(',')]
+                        if not values:
+                            raise ValueError("列表不能为空")
+                        delay_action = {
+                            'type': 'delay',
+                            'delay_mode': 'list',
+                            'delay_values': values
+                        }
+                        loop_actions.append(delay_action)
+                        refresh_actions_list()
+                        edit_status_label.config(text=f"已插入列表延时 {values}", foreground="green")
+                    except ValueError:
+                        from tkinter import messagebox
+                        messagebox.showerror("错误", "列表格式无效，请使用逗号分隔的数字")
+                        return
                 delay_dialog.destroy()
 
             btn_frame = ttk.Frame(main_frame_d)
             btn_frame.pack(pady=10)
             ttk.Button(btn_frame, text="确定", command=confirm_delay).pack(side=tk.LEFT, padx=10)
             ttk.Button(btn_frame, text="取消", command=on_dialog_close).pack(side=tk.LEFT, padx=10)
-
-            delay_entry.bind('<Return>', lambda e: confirm_delay())
 
         def insert_screenshot_action():
             """插入截屏动作 - 弹出配置对话框"""
@@ -4732,23 +4798,18 @@ class AutoTestGUI:
                 interval_mode = interval_mode_var.get()
                 if interval_mode == 'fixed':
                     action['loop_interval'] = interval_var.get()
-                elif interval_mode == 'range':
-                    if range_sub_type_var.get() == "arithmetic":
-                        action['loop_interval'] = {
-                            'type': 'range',
-                            'sub_type': 'arithmetic',
-                            'start': interval_start_var.get(),
-                            'step': interval_step_var.get(),
-                            'end': interval_end_var.get()
-                        }
-                    else:
-                        action['loop_interval'] = {
-                            'type': 'range',
-                            'sub_type': 'geometric',
-                            'start': interval_geo_start_var.get(),
-                            'ratio': interval_ratio_var.get(),
-                            'steps': interval_steps_var.get()
-                        }
+                elif interval_mode == 'arithmetic':
+                    action['loop_interval'] = {
+                        'type': 'arithmetic',
+                        'start': interval_start_var.get(),
+                        'step': interval_step_var.get()
+                    }
+                elif interval_mode == 'geometric':
+                    action['loop_interval'] = {
+                        'type': 'geometric',
+                        'start': interval_geo_start_var.get(),
+                        'ratio': interval_ratio_var.get()
+                    }
                 elif interval_mode == 'list':
                     try:
                         values = [float(v.strip()) for v in interval_list_var.get().split(',')]
@@ -4955,7 +5016,7 @@ class AutoTestGUI:
 
         dialog = tk.Toplevel(self.root)
         dialog.title("编辑输入动作")
-        dialog.geometry("500x250")
+        dialog.geometry("575x175")
         dialog.transient(self.root)
         dialog.attributes('-topmost', True)
 
@@ -5385,8 +5446,10 @@ class AutoTestGUI:
         ttk.Label(interval_mode_frame, text="间隔模式:").pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(interval_mode_frame, text="固定", variable=interval_mode_var, value="fixed",
                         command=lambda: update_interval_ui("fixed")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(interval_mode_frame, text="范围", variable=interval_mode_var, value="range",
-                        command=lambda: update_interval_ui("range")).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(interval_mode_frame, text="等差", variable=interval_mode_var, value="arithmetic",
+                        command=lambda: update_interval_ui("arithmetic")).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(interval_mode_frame, text="等比", variable=interval_mode_var, value="geometric",
+                        command=lambda: update_interval_ui("geometric")).pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(interval_mode_frame, text="列表", variable=interval_mode_var, value="list",
                         command=lambda: update_interval_ui("list")).pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(interval_mode_frame, text="随机", variable=interval_mode_var, value="random",
@@ -5405,59 +5468,31 @@ class AutoTestGUI:
             interval_var = tk.DoubleVar(value=interval_params.get('value', 1.0) if isinstance(interval_params, dict) else 1.0)
         ttk.Entry(fixed_interval_frame, width=10, textvariable=interval_var).pack(side=tk.LEFT, padx=2)
 
-        # 范围间隔（等差/等比）
-        range_interval_frame = ttk.Frame(interval_params_frame)
-        range_sub_type_var = tk.StringVar(value="geometric" if (isinstance(interval_params, dict) and interval_params.get('sub_type') == 'geometric') else "arithmetic")
-
-        # Radiobutton 放在外层，始终可见
-        ttk.Radiobutton(range_interval_frame, text="等差", variable=range_sub_type_var, value="arithmetic",
-                        command=lambda: update_range_sub_ui()).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(range_interval_frame, text="等比", variable=range_sub_type_var, value="geometric",
-                        command=lambda: update_range_sub_ui()).pack(side=tk.LEFT, padx=2)
-
-        # 等差子模式 - 参数区域
-        arithmetic_frame = ttk.Frame(range_interval_frame)
-        ttk.Label(arithmetic_frame, text="起始:").pack(side=tk.LEFT, padx=2)
-        if isinstance(interval_params, dict) and interval_params.get('sub_type') != 'geometric':
+        # 等差间隔
+        arithmetic_interval_frame = ttk.Frame(interval_params_frame)
+        ttk.Label(arithmetic_interval_frame, text="初始值:").pack(side=tk.LEFT, padx=2)
+        if isinstance(interval_params, dict) and interval_params.get('type') == 'arithmetic':
             interval_start_var = tk.DoubleVar(value=interval_params.get('start', 1.0))
             interval_step_var = tk.DoubleVar(value=interval_params.get('step', 0.1))
-            interval_end_var = tk.DoubleVar(value=interval_params.get('end', 2.0))
         else:
             interval_start_var = tk.DoubleVar(value=1.0)
             interval_step_var = tk.DoubleVar(value=0.1)
-            interval_end_var = tk.DoubleVar(value=2.0)
-        ttk.Entry(arithmetic_frame, width=8, textvariable=interval_start_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(arithmetic_frame, text="步距:").pack(side=tk.LEFT, padx=2)
-        ttk.Entry(arithmetic_frame, width=8, textvariable=interval_step_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(arithmetic_frame, text="上限:").pack(side=tk.LEFT, padx=2)
-        ttk.Entry(arithmetic_frame, width=8, textvariable=interval_end_var).pack(side=tk.LEFT, padx=2)
+        ttk.Entry(arithmetic_interval_frame, width=8, textvariable=interval_start_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(arithmetic_interval_frame, text="等差系数:").pack(side=tk.LEFT, padx=2)
+        ttk.Entry(arithmetic_interval_frame, width=8, textvariable=interval_step_var).pack(side=tk.LEFT, padx=2)
 
-        # 等比子模式 - 参数区域
-        geometric_frame = ttk.Frame(range_interval_frame)
-        ttk.Label(geometric_frame, text="起始:").pack(side=tk.LEFT, padx=2)
-        if isinstance(interval_params, dict) and interval_params.get('sub_type') == 'geometric':
+        # 等比间隔
+        geometric_interval_frame = ttk.Frame(interval_params_frame)
+        ttk.Label(geometric_interval_frame, text="初始值:").pack(side=tk.LEFT, padx=2)
+        if isinstance(interval_params, dict) and interval_params.get('type') == 'geometric':
             interval_geo_start_var = tk.DoubleVar(value=interval_params.get('start', 1.0))
             interval_ratio_var = tk.DoubleVar(value=interval_params.get('ratio', 1.5))
-            interval_steps_var = tk.IntVar(value=interval_params.get('steps', 10))
         else:
             interval_geo_start_var = tk.DoubleVar(value=1.0)
             interval_ratio_var = tk.DoubleVar(value=1.5)
-            interval_steps_var = tk.IntVar(value=10)
-        ttk.Entry(geometric_frame, width=8, textvariable=interval_geo_start_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(geometric_frame, text="等比系数:").pack(side=tk.LEFT, padx=2)
-        ttk.Entry(geometric_frame, width=8, textvariable=interval_ratio_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(geometric_frame, text="步数:").pack(side=tk.LEFT, padx=2)
-        ttk.Entry(geometric_frame, width=8, textvariable=interval_steps_var).pack(side=tk.LEFT, padx=2)
-
-        def update_range_sub_ui():
-            arithmetic_frame.pack_forget()
-            geometric_frame.pack_forget()
-            if range_sub_type_var.get() == "arithmetic":
-                arithmetic_frame.pack(side=tk.LEFT, padx=2)
-            else:
-                geometric_frame.pack(side=tk.LEFT, padx=2)
-
-        update_range_sub_ui()
+        ttk.Entry(geometric_interval_frame, width=8, textvariable=interval_geo_start_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(geometric_interval_frame, text="等比系数:").pack(side=tk.LEFT, padx=2)
+        ttk.Entry(geometric_interval_frame, width=8, textvariable=interval_ratio_var).pack(side=tk.LEFT, padx=2)
 
         # 列表间隔
         list_interval_frame = ttk.Frame(interval_params_frame)
@@ -5486,14 +5521,16 @@ class AutoTestGUI:
 
         def update_interval_ui(mode):
             fixed_interval_frame.pack_forget()
-            range_interval_frame.pack_forget()
+            arithmetic_interval_frame.pack_forget()
+            geometric_interval_frame.pack_forget()
             list_interval_frame.pack_forget()
             random_interval_frame.pack_forget()
             if mode == "fixed":
                 fixed_interval_frame.pack(side=tk.LEFT, padx=2)
-            elif mode == "range":
-                range_interval_frame.pack(side=tk.LEFT, padx=2)
-                update_range_sub_ui()
+            elif mode == "arithmetic":
+                arithmetic_interval_frame.pack(side=tk.LEFT, padx=2)
+            elif mode == "geometric":
+                geometric_interval_frame.pack(side=tk.LEFT, padx=2)
             elif mode == "list":
                 list_interval_frame.pack(side=tk.LEFT, padx=2)
             else:  # random
@@ -5644,14 +5681,91 @@ class AutoTestGUI:
             select_hint_window.protocol('WM_DELETE_WINDOW', stop_recording_and_close)
 
         def insert_delay():
-            """插入固定延时"""
-            delay_action = {
-                'type': 'delay',
-                'delay': 1.0
-            }
-            loop_actions.append(delay_action)
-            refresh_list()
-            edit_status_label.config(text="已插入固定延时", foreground="green")
+            """插入延时"""
+            delay_dialog = tk.Toplevel(dialog)
+            delay_dialog.title("延时设置")
+            delay_dialog.geometry("300x180")
+            delay_dialog.transient(dialog)
+            delay_dialog.attributes('-topmost', True)
+            delay_dialog.grab_set()
+
+            def on_dialog_close():
+                delay_dialog.destroy()
+
+            delay_dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
+
+            main_frame_d = ttk.Frame(delay_dialog, padding="10")
+            main_frame_d.pack(fill=tk.BOTH, expand=True)
+
+            # 延时类型选择
+            delay_type_var = tk.StringVar(value="fixed")
+            ttk.Label(main_frame_d, text="延时类型:").pack(pady=5)
+            type_frame = ttk.Frame(main_frame_d)
+            type_frame.pack(pady=5)
+            ttk.Radiobutton(type_frame, text="固定", variable=delay_type_var, value="fixed",
+                            command=lambda: update_delay_ui("fixed")).pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(type_frame, text="列表", variable=delay_type_var, value="list",
+                            command=lambda: update_delay_ui("list")).pack(side=tk.LEFT, padx=5)
+
+            # 参数框架
+            params_frame = ttk.Frame(main_frame_d)
+            params_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+            # 固定延时
+            fixed_frame = ttk.Frame(params_frame)
+            ttk.Label(fixed_frame, text="延时时间(秒):").pack(side=tk.LEFT, padx=5)
+            delay_var = tk.DoubleVar(value=1.0)
+            ttk.Entry(fixed_frame, textvariable=delay_var, width=10).pack(side=tk.LEFT, padx=5)
+
+            # 列表延时
+            list_frame = ttk.Frame(params_frame)
+            ttk.Label(list_frame, text="延时列表(逗号分隔):").pack(side=tk.LEFT, padx=5)
+            list_var = tk.StringVar(value="0.5,1.0,1.5,2.0")
+            ttk.Entry(list_frame, textvariable=list_var, width=20).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+
+            def update_delay_ui(delay_type):
+                fixed_frame.pack_forget()
+                list_frame.pack_forget()
+                if delay_type == "fixed":
+                    fixed_frame.pack(pady=10)
+                else:
+                    list_frame.pack(pady=10, fill=tk.BOTH, expand=True)
+
+            update_delay_ui("fixed")
+
+            def confirm_delay():
+                delay_type = delay_type_var.get()
+                if delay_type == "fixed":
+                    delay_action = {
+                        'type': 'delay',
+                        'delay': delay_var.get()
+                    }
+                    loop_actions.append(delay_action)
+                    refresh_list()
+                    edit_status_label.config(text=f"已插入固定延时 ({delay_var.get()}秒)", foreground="green")
+                else:
+                    try:
+                        values = [float(v.strip()) for v in list_var.get().split(',')]
+                        if not values:
+                            raise ValueError("列表不能为空")
+                        delay_action = {
+                            'type': 'delay',
+                            'delay_mode': 'list',
+                            'delay_values': values
+                        }
+                        loop_actions.append(delay_action)
+                        refresh_list()
+                        edit_status_label.config(text=f"已插入列表延时 {values}", foreground="green")
+                    except ValueError:
+                        from tkinter import messagebox
+                        messagebox.showerror("错误", "列表格式无效，请使用逗号分隔的数字")
+                        return
+                delay_dialog.destroy()
+
+            btn_frame = ttk.Frame(main_frame_d)
+            btn_frame.pack(pady=10)
+            ttk.Button(btn_frame, text="确定", command=confirm_delay).pack(side=tk.LEFT, padx=10)
+            ttk.Button(btn_frame, text="取消", command=on_dialog_close).pack(side=tk.LEFT, padx=10)
 
         def insert_screenshot_action():
             """插入截屏动作"""
@@ -5695,23 +5809,18 @@ class AutoTestGUI:
                 interval_mode = interval_mode_var.get()
                 if interval_mode == 'fixed':
                     action['loop_interval'] = interval_var.get()
-                elif interval_mode == 'range':
-                    if range_sub_type_var.get() == "arithmetic":
-                        action['loop_interval'] = {
-                            'type': 'range',
-                            'sub_type': 'arithmetic',
-                            'start': interval_start_var.get(),
-                            'step': interval_step_var.get(),
-                            'end': interval_end_var.get()
-                        }
-                    else:
-                        action['loop_interval'] = {
-                            'type': 'range',
-                            'sub_type': 'geometric',
-                            'start': interval_geo_start_var.get(),
-                            'ratio': interval_ratio_var.get(),
-                            'steps': interval_steps_var.get()
-                        }
+                elif interval_mode == 'arithmetic':
+                    action['loop_interval'] = {
+                        'type': 'arithmetic',
+                        'start': interval_start_var.get(),
+                        'step': interval_step_var.get()
+                    }
+                elif interval_mode == 'geometric':
+                    action['loop_interval'] = {
+                        'type': 'geometric',
+                        'start': interval_geo_start_var.get(),
+                        'ratio': interval_ratio_var.get()
+                    }
                 elif interval_mode == 'list':
                     try:
                         values = [float(v.strip()) for v in interval_list_var.get().split(',')]
@@ -6426,7 +6535,7 @@ class AutoTestGUI:
 
         dialog = tk.Toplevel(self.root)
         dialog.title("编辑循环组")
-        dialog.geometry("385x225")
+        dialog.geometry("250x132")
         dialog.transient(self.root)
         dialog.attributes('-topmost', True)
 
@@ -6437,7 +6546,7 @@ class AutoTestGUI:
         dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
         dialog.grab_set()
 
-        frame = ttk.Frame(dialog, padding="10")
+        frame = ttk.Frame(dialog, padding="20")
         frame.pack(fill=tk.BOTH, expand=True)
 
         # 计算循环次数上限（如果包含列表遍历类型的遍历输入，最大值设为列表长度）
@@ -6451,125 +6560,26 @@ class AutoTestGUI:
                     break
 
         # 循环次数
-        ttk.Label(frame, text="循环次数:").grid(row=0, column=0, padx=5, pady=10, sticky="e")
+        loop_count_frame = ttk.Frame(frame)
+        loop_count_frame.pack(fill=tk.X, pady=10)
+        ttk.Label(loop_count_frame, text="循环次数：").pack(side=tk.LEFT)
         loop_count_var = tk.IntVar(value=min(action.get('loop_count', 1), max_loop_count))
-        loop_count_spinbox = ttk.Spinbox(frame, from_=1, to=max_loop_count, width=15, textvariable=loop_count_var)
-        loop_count_spinbox.grid(row=0, column=1, padx=5, pady=10, sticky="w")
-
-        # 循环间隔类型选择
-        interval_type_var = tk.StringVar(value=action.get('loop_interval_type', 'fixed'))
-        interval_params = action.get('loop_interval', {})
-
-        ttk.Label(frame, text="间隔模式:").grid(row=1, column=0, padx=5, pady=10, sticky="e")
-        interval_type_frame = ttk.Frame(frame)
-        interval_type_frame.grid(row=1, column=1, padx=5, pady=10, sticky="w")
-
-        ttk.Radiobutton(interval_type_frame, text="固定", variable=interval_type_var, value="fixed",
-                        command=lambda: update_interval_ui("fixed")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(interval_type_frame, text="范围", variable=interval_type_var, value="range",
-                        command=lambda: update_interval_ui("range")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(interval_type_frame, text="列表", variable=interval_type_var, value="list",
-                        command=lambda: update_interval_ui("list")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(interval_type_frame, text="随机", variable=interval_type_var, value="random",
-                        command=lambda: update_interval_ui("random")).pack(side=tk.LEFT, padx=2)
-
-        # 间隔参数框架
-        interval_frame = ttk.Frame(frame)
-        interval_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
-
-        # 固定间隔
-        fixed_frame = ttk.Frame(interval_frame)
-        ttk.Label(fixed_frame, text="间隔(秒):").pack(side=tk.LEFT, padx=2)
-        loop_interval_var = tk.DoubleVar(value=interval_params.get('value', 0.5))
-        ttk.Entry(fixed_frame, width=10, textvariable=loop_interval_var).pack(side=tk.LEFT, padx=2)
-
-        # 范围间隔
-        range_frame = ttk.Frame(interval_frame)
-        ttk.Label(range_frame, text="最小:").pack(side=tk.LEFT, padx=2)
-        range_min_var = tk.DoubleVar(value=interval_params.get('min', 0.5))
-        ttk.Entry(range_frame, width=8, textvariable=range_min_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(range_frame, text="最大:").pack(side=tk.LEFT, padx=2)
-        range_max_var = tk.DoubleVar(value=interval_params.get('max', 2.0))
-        ttk.Entry(range_frame, width=8, textvariable=range_max_var).pack(side=tk.LEFT, padx=2)
-
-        # 列表间隔
-        list_frame = ttk.Frame(interval_frame)
-        ttk.Label(list_frame, text="列表(逗号分隔):").pack(side=tk.LEFT, padx=2)
-        list_values = interval_params.get('values', [0.5, 1.0, 1.5, 2.0])
-        list_values_var = tk.StringVar(value=','.join(str(v) for v in list_values))
-        ttk.Entry(list_frame, width=20, textvariable=list_values_var).pack(side=tk.LEFT, padx=2)
-
-        # 随机间隔
-        random_frame = ttk.Frame(interval_frame)
-        ttk.Label(random_frame, text="最小:").pack(side=tk.LEFT, padx=2)
-        random_min_var = tk.DoubleVar(value=interval_params.get('min', 0.5))
-        ttk.Entry(random_frame, width=8, textvariable=random_min_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(random_frame, text="最大:").pack(side=tk.LEFT, padx=2)
-        random_max_var = tk.DoubleVar(value=interval_params.get('max', 2.0))
-        ttk.Entry(random_frame, width=8, textvariable=random_max_var).pack(side=tk.LEFT, padx=2)
-
-        def update_interval_ui(interval_type):
-            fixed_frame.grid_remove()
-            range_frame.grid_remove()
-            list_frame.grid_remove()
-            random_frame.grid_remove()
-            if interval_type == "fixed":
-                fixed_frame.grid()
-            elif interval_type == "range":
-                range_frame.grid()
-            elif interval_type == "list":
-                list_frame.grid()
-            else:  # random
-                random_frame.grid()
-
-        # 初始化UI状态
-        update_interval_ui(interval_type_var.get())
+        loop_count_spinbox = ttk.Spinbox(loop_count_frame, from_=1, to=max_loop_count, width=15, textvariable=loop_count_var)
+        loop_count_spinbox.pack(side=tk.LEFT, padx=8)
 
         def confirm():
             try:
                 loop_count = loop_count_var.get()
                 if loop_count < 1:
                     raise ValueError("循环次数至少为1")
-
-                interval_type = interval_type_var.get()
-                if interval_type == "fixed":
-                    loop_interval = loop_interval_var.get()
-                    if loop_interval < 0:
-                        raise ValueError("间隔不能为负数")
-                    interval_params = {'type': 'fixed', 'value': loop_interval}
-                elif interval_type == "range":
-                    min_val = range_min_var.get()
-                    max_val = range_max_var.get()
-                    if min_val < 0 or max_val < min_val:
-                        raise ValueError("无效的范围")
-                    interval_params = {'type': 'range', 'min': min_val, 'max': max_val}
-                elif interval_type == "list":
-                    values_str = list_values_var.get().strip()
-                    if not values_str:
-                        raise ValueError("列表不能为空")
-                    try:
-                        values = [float(v.strip()) for v in values_str.split(',')]
-                    except ValueError:
-                        raise ValueError("列表格式无效，请使用逗号分隔的数字")
-                    interval_params = {'type': 'list', 'values': values}
-                else:  # random
-                    min_val = random_min_var.get()
-                    max_val = random_max_var.get()
-                    if min_val < 0 or max_val < min_val:
-                        raise ValueError("无效的范围")
-                    interval_params = {'type': 'random', 'min': min_val, 'max': max_val}
-
                 action['loop_count'] = loop_count
-                action['loop_interval_type'] = interval_type
-                action['loop_interval'] = interval_params
-
                 self._update_action_list()
                 self.in_dialog_operation = False
                 dialog.destroy()
             except Exception as e:
                 messagebox.showerror("错误", f"输入无效: {str(e)}")
 
-        ttk.Button(frame, text="确定", command=confirm).grid(row=3, column=0, columnspan=2, pady=10)
+        ttk.Button(frame, text="确定", command=confirm).pack(pady=10)
 
     def _edit_top_loop_group(self, action, index):
         """编辑顶层的循环组"""
@@ -6629,7 +6639,7 @@ class AutoTestGUI:
 
         dialog = tk.Toplevel(self.root)
         dialog.title("修改延时")
-        dialog.geometry("500x250")
+        dialog.geometry("575x175")
         dialog.transient(self.root)
         dialog.attributes('-topmost', True)
 
@@ -6705,6 +6715,23 @@ class AutoTestGUI:
                     dialog.destroy()
                 except Exception as e:
                     messagebox.showerror("错误", f"输入无效: {str(e)}")
+        elif action_type == 'delay' and action.get('delay_mode') == 'list':
+            ttk.Label(frame, text="延时列表(逗号分隔):").grid(row=0, column=0, padx=5, pady=10, sticky="e")
+            values = action.get('delay_values', [1.0])
+            list_var = tk.StringVar(value=','.join(str(v) for v in values))
+            ttk.Entry(frame, width=25, textvariable=list_var).grid(row=0, column=1, padx=5, pady=10, sticky="w")
+
+            def confirm():
+                try:
+                    new_values = [float(v.strip()) for v in list_var.get().split(',')]
+                    if not new_values:
+                        raise ValueError("列表不能为空")
+                    action['delay_values'] = new_values
+                    self._update_action_list()
+                    self.in_dialog_operation = False
+                    dialog.destroy()
+                except Exception as e:
+                    messagebox.showerror("错误", f"输入无效: {str(e)}")
         else:
             ttk.Label(frame, text="相对延时(秒):").grid(row=0, column=0, padx=5, pady=10, sticky="e")
             time_var = tk.DoubleVar(value=action.get('time', 0))
@@ -6775,7 +6802,7 @@ class AutoTestGUI:
             # 弹出对话框修改时间
             dialog = tk.Toplevel(self.root)
             dialog.title("修改延时")
-            dialog.geometry("500x250")
+            dialog.geometry("575x175")
             dialog.transient(self.root)
 
             def on_dialog_close():
@@ -6794,7 +6821,18 @@ class AutoTestGUI:
             # 延时动作使用完整的延时类型选择界面
             if action_type in ['delay', 'random_delay', 'multiply_delay', 'arithmetic_delay']:
                 # 延时类型选择 - 将动作类型映射到UI类型
-                ui_type = "fixed" if action_type == "delay" else action_type
+                if action_type == "delay" and action.get('delay_mode') == 'list':
+                    ui_type = "list"
+                elif action_type == "delay":
+                    ui_type = "fixed"
+                elif action_type == "random_delay":
+                    ui_type = "random"
+                elif action_type == "multiply_delay":
+                    ui_type = "multiply"
+                elif action_type == "arithmetic_delay":
+                    ui_type = "arithmetic"
+                else:
+                    ui_type = action_type
                 type_var = tk.StringVar(value=ui_type)
 
                 # 类型选择
@@ -6809,6 +6847,8 @@ class AutoTestGUI:
                                command=lambda: update_ui("multiply")).pack(side=tk.LEFT, padx=2)
                 ttk.Radiobutton(type_frame, text="等差递增", variable=type_var, value="arithmetic",
                                command=lambda: update_ui("arithmetic")).pack(side=tk.LEFT, padx=2)
+                ttk.Radiobutton(type_frame, text="列表", variable=type_var, value="list",
+                               command=lambda: update_ui("list")).pack(side=tk.LEFT, padx=2)
 
                 # 固定延时参数
                 fixed_frame = ttk.Frame(frame)
@@ -6854,30 +6894,47 @@ class AutoTestGUI:
                 arithmetic_step_var = tk.DoubleVar(value=action.get('step_delay', 0.1))
                 ttk.Entry(arithmetic_frame, width=10, textvariable=arithmetic_step_var).grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
+                # 列表延时参数
+                list_frame = ttk.Frame(frame)
+                list_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
+
+                ttk.Label(list_frame, text="延时列表(逗号分隔):").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+                values = action.get('delay_values', [1.0])
+                list_var = tk.StringVar(value=','.join(str(v) for v in values))
+                ttk.Entry(list_frame, width=25, textvariable=list_var).grid(row=0, column=1, padx=5, pady=5, sticky="w")
+
                 def update_ui(delay_type):
                     if delay_type in ("fixed", "delay"):
                         fixed_frame.grid()
                         random_frame.grid_remove()
                         exp_frame.grid_remove()
                         arithmetic_frame.grid_remove()
+                        list_frame.grid_remove()
                     elif delay_type == "random":
                         fixed_frame.grid_remove()
                         random_frame.grid()
                         exp_frame.grid_remove()
                         arithmetic_frame.grid_remove()
+                        list_frame.grid_remove()
                     elif delay_type == "multiply":
                         fixed_frame.grid_remove()
                         random_frame.grid_remove()
                         exp_frame.grid()
                         arithmetic_frame.grid_remove()
-                    else:  # arithmetic
+                        list_frame.grid_remove()
+                    elif delay_type == "arithmetic":
                         fixed_frame.grid_remove()
                         random_frame.grid_remove()
                         exp_frame.grid_remove()
                         arithmetic_frame.grid()
+                        list_frame.grid_remove()
+                    else:  # list
+                        fixed_frame.grid_remove()
+                        random_frame.grid_remove()
+                        exp_frame.grid_remove()
+                        arithmetic_frame.grid_remove()
+                        list_frame.grid()
 
-                # 初始化UI状态 - 将动作类型映射到UI类型
-                ui_type = "fixed" if action_type == "delay" else action_type
                 update_ui(ui_type)
 
                 def confirm():
@@ -6890,6 +6947,9 @@ class AutoTestGUI:
                                 raise ValueError("延时不能为负数")
                             action['type'] = 'delay'
                             action['delay'] = delay
+                            # 清除列表相关字段
+                            action.pop('delay_mode', None)
+                            action.pop('delay_values', None)
                         elif delay_type == "random":
                             min_delay = min_var.get()
                             max_delay = max_var.get()
@@ -6898,13 +6958,26 @@ class AutoTestGUI:
                             action['type'] = 'random_delay'
                             action['min_delay'] = min_delay
                             action['max_delay'] = max_delay
+                            # 清除其他类型字段
+                            action.pop('delay', None)
+                            action.pop('delay_mode', None)
+                            action.pop('delay_values', None)
+                            action.pop('base_delay', None)
+                            action.pop('start_delay', None)
+                            action.pop('step_delay', None)
                         elif delay_type == "multiply":
                             base_delay = base_var.get()
                             if base_delay < 0:
                                 raise ValueError("基数不能为负数")
                             action['type'] = 'multiply_delay'
                             action['base_delay'] = base_delay
-                        else:  # arithmetic
+                            # 清除其他类型字段
+                            action.pop('delay', None)
+                            action.pop('delay_mode', None)
+                            action.pop('delay_values', None)
+                            action.pop('start_delay', None)
+                            action.pop('step_delay', None)
+                        elif delay_type == "arithmetic":
                             start_delay = arithmetic_start_var.get()
                             step_delay = arithmetic_step_var.get()
                             if start_delay < 0 or step_delay < 0:
@@ -6912,6 +6985,24 @@ class AutoTestGUI:
                             action['type'] = 'arithmetic_delay'
                             action['start_delay'] = start_delay
                             action['step_delay'] = step_delay
+                            # 清除其他类型字段
+                            action.pop('delay', None)
+                            action.pop('delay_mode', None)
+                            action.pop('delay_values', None)
+                            action.pop('base_delay', None)
+                        elif delay_type == "list":
+                            try:
+                                values = [float(v.strip()) for v in list_var.get().split(',')]
+                                if not values:
+                                    raise ValueError("列表不能为空")
+                                action['type'] = 'delay'
+                                action['delay_mode'] = 'list'
+                                action['delay_values'] = values
+                                # 清除固定延时字段
+                                action.pop('delay', None)
+                            except ValueError:
+                                messagebox.showerror("错误", "列表格式无效，请使用逗号分隔的数字")
+                                return
 
                         self._update_action_list(select_index=index)
                         self.in_dialog_operation = False
