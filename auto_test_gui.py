@@ -3053,6 +3053,8 @@ class AutoTestGUI:
                     else:
                         insert_pos = len(self.actions)
                     self.actions.insert(insert_pos, action)
+                    # 调整后续动作的time，保持相对延时不变
+                    self._shift_action_times(insert_pos + 1, delay_var.get())
                     self._invalidate_relative_delay_cache()
                     self._update_action_list(select_index=insert_pos)
 
@@ -3373,6 +3375,8 @@ class AutoTestGUI:
                         action['time'] = self.actions[-1].get('time', 0) + 0.5
 
                     self.actions.insert(insert_pos, action)
+                    # 调整后续动作的time，保持相对延时不变
+                    self._shift_action_times(insert_pos + 1, 0.5)
                     self._invalidate_relative_delay_cache()
                     self._update_action_list(scroll_to_end=True)
 
