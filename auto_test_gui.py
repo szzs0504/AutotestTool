@@ -482,6 +482,16 @@ class AutoTestGUI:
                 return
 
             current_time = time.time() - self.record_start_time  # 使用相对时间
+            # 计算延时（当前动作与上一个动作的时间差）
+            if self.actions:
+                last_time = self.actions[-1].get('delay', 0) + (self.actions[-1].get('time', 0) if 'time' in self.actions[-1] else 0)
+                # 如果上一个动作没有 time 字段，使用 last_click_time 代替
+                if 'time' not in self.actions[-1]:
+                    last_time = self.last_click_time
+                action_delay = current_time - last_time
+            else:
+                action_delay = current_time
+
             # 检测双击（使用距离阈值，避免精确坐标匹配问题）
             last_x, last_y = self.last_click_position
             distance = abs(x - last_x) + abs(y - last_y)  # 曼哈顿距离
@@ -499,10 +509,9 @@ class AutoTestGUI:
                     'x': x,
                     'y': y,
                     'button': str(button),
-                    'time': current_time
+                    'delay': action_delay
                 })
                 self.update_action_list_display()
-                self._invalidate_relative_delay_cache()
             else:
                 # 记录单击
                 self.actions.append({
@@ -510,11 +519,10 @@ class AutoTestGUI:
                     'x': x,
                     'y': y,
                     'button': str(button),
-                    'time': current_time
+                    'delay': action_delay
                 })
                 self.update_action_list_display()
-                self._invalidate_relative_delay_cache()
-            
+
             self.last_click_time = current_time
             self.last_click_position = (x, y)
 
@@ -525,6 +533,13 @@ class AutoTestGUI:
                 return
 
             current_time = time.time() - self.record_start_time
+            # 计算延时
+            if self.actions:
+                last_time = self.last_scroll_time
+                action_delay = current_time - last_time
+            else:
+                action_delay = current_time
+
             # 防止滚轮事件记录过于频繁
             if current_time - self.last_scroll_time >= self.scroll_threshold:
                 self.actions.append({
@@ -533,10 +548,9 @@ class AutoTestGUI:
                     'y': y,
                     'dx': dx,
                     'dy': dy,
-                    'time': current_time
+                    'delay': action_delay
                 })
                 self.update_action_list_display()
-                self._invalidate_relative_delay_cache()
                 self.last_scroll_time = current_time
 
     def on_key_down(self, key):
@@ -558,32 +572,37 @@ class AutoTestGUI:
                     return
                 current_time = time.time() - self.record_start_time
                 key_str = self.convert_key_name(key)
-                
+
                 if key_str in self.pressed_keys:
                     self.pressed_keys.remove(key_str)
-                    
+
                     # 获取当前按下的所有键
                     current_keys = list(self.pressed_keys)
-                    
+
+                    # 计算延时
+                    if self.actions:
+                        last_time = self.last_click_time  # 使用上一次的点击时间作为参考
+                        action_delay = current_time - last_time
+                    else:
+                        action_delay = current_time
+
                     # 如果是组合键
                     if current_keys:
                         all_keys = current_keys + [key_str]
                         self.actions.append({
                             'type': 'keyboard',
                             'keys': all_keys,
-                            'time': current_time
+                            'delay': action_delay
                         })
                         self.update_action_list_display()
-                        self._invalidate_relative_delay_cache()
                     else:
                         # 单个键
                         self.actions.append({
                             'type': 'keyboard',
                             'keys': [key_str],
-                            'time': current_time
+                            'delay': action_delay
                         })
                         self.update_action_list_display()
-                        self._invalidate_relative_delay_cache()
         except AttributeError:
             pass
 
@@ -921,16 +940,22 @@ class AutoTestGUI:
                     if self.record_mouse_move.get():
                         if not self.is_in_window(current_position[0], current_position[1]):
                             # 优化移动事件记录
-                            if (last_position != current_position and 
+                            if (last_position != current_position and
                                 current_time - self.last_move_time >= self.move_threshold):
+                                # 计算延时
+                                if self.actions:
+                                    action_delay = current_time - self.last_move_time
+                                else:
+                                    action_delay = current_time
+
                                 self.actions.append({
                                     'type': 'move',
                                     'x': current_position[0],
                                     'y': current_position[1],
-                                    'time': current_time
+                                    'delay': action_delay
                                 })
                                 # 使用 root.after 确保在主线程中更新 UI
-                                self.root.after(0, lambda pos=current_position: 
+                                self.root.after(0, lambda pos=current_position:
                                     self.update_action_list_display())
                                 last_position = current_position
                                 self.last_move_time = current_time
@@ -4398,6 +4423,13 @@ class AutoTestGUI:
                     pass
 
                 current_time = time.time() - self.record_start_time
+                # 计算延时
+                if loop_actions:
+                    last_time = self.last_click_time
+                    action_delay = current_time - last_time
+                else:
+                    action_delay = current_time
+
                 last_x, last_y = self.last_click_position
                 distance = abs(x - last_x) + abs(y - last_y)
                 is_double_click = (current_time - self.last_click_time < self.double_click_threshold and
@@ -4408,12 +4440,12 @@ class AutoTestGUI:
                         loop_actions.pop()
                     loop_actions.append({
                         'type': 'doubleclick', 'x': x, 'y': y,
-                        'button': str(button), 'time': current_time
+                        'button': str(button), 'delay': action_delay
                     })
                 else:
                     loop_actions.append({
                         'type': 'click', 'x': x, 'y': y,
-                        'button': str(button), 'time': current_time
+                        'button': str(button), 'delay': action_delay
                     })
                 self.last_click_time = current_time
                 self.last_click_position = (x, y)
@@ -4436,10 +4468,16 @@ class AutoTestGUI:
                 except Exception:
                     pass
                 current_time = time.time() - self.record_start_time
+                # 计算延时
+                if loop_actions:
+                    action_delay = current_time - self.last_scroll_time
+                else:
+                    action_delay = current_time
+
                 if current_time - self.last_scroll_time >= self.scroll_threshold:
                     loop_actions.append({
                         'type': 'scroll', 'x': x, 'y': y,
-                        'dx': dx, 'dy': dy, 'time': current_time
+                        'dx': dx, 'dy': dy, 'delay': action_delay
                     })
                     self.last_scroll_time = current_time
                     loop_action_tree.after(0, update_temp_actions_list)
@@ -4463,13 +4501,20 @@ class AutoTestGUI:
                         if key_str in self.pressed_keys:
                             self.pressed_keys.remove(key_str)
                         current_keys = list(self.pressed_keys)
+
+                        # 计算延时
+                        if loop_actions:
+                            action_delay = current_time - self.last_click_time
+                        else:
+                            action_delay = current_time
+
                         if current_keys:
                             loop_actions.append({
-                                'type': 'keyboard', 'keys': current_keys + [key_str], 'time': current_time
+                                'type': 'keyboard', 'keys': current_keys + [key_str], 'delay': action_delay
                             })
                         else:
                             loop_actions.append({
-                                'type': 'keyboard', 'keys': [key_str], 'time': current_time
+                                'type': 'keyboard', 'keys': [key_str], 'delay': action_delay
                             })
                         loop_action_tree.after(0, update_temp_actions_list)
                 except AttributeError:
