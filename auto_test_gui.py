@@ -3016,12 +3016,17 @@ class AutoTestGUI:
                 if target_x is None or target_y is None:
                     raise ValueError("请输入有效的坐标")
 
+                # 计算新动作的绝对时间 = 前一个动作的time + 相对延时
+                new_time = delay_var.get()
+                if insert_pos > 0 and 'time' in self.actions[insert_pos - 1]:
+                    new_time = self.actions[insert_pos - 1].get('time', 0) + delay_var.get()
+
                 action = {
                     'type': 'click',
                     'x': target_x,
                     'y': target_y,
                     'button': 'left',
-                    'time': delay_var.get()
+                    'time': new_time
                 }
 
                 # 重新获取选择并检查是否循环组内
@@ -3329,13 +3334,6 @@ class AutoTestGUI:
                     'remark': ''
                 }
 
-                # 计算time
-                time = 0
-                if self.actions:
-                    time = self.actions[-1].get('time', 0) + 0.5
-
-                action['time'] = time
-
                 # 插入到动作列表
                 selection = self._get_selected_indices()
 
@@ -3367,6 +3365,12 @@ class AutoTestGUI:
                         insert_pos = int_indices[-1] + 1
                     else:
                         insert_pos = len(self.actions)
+
+                    # 计算新动作的绝对时间 = 前一个动作的time + 相对延时(默认0.5)
+                    if insert_pos > 0 and 'time' in self.actions[insert_pos - 1]:
+                        action['time'] = self.actions[insert_pos - 1].get('time', 0) + 0.5
+                    elif self.actions:
+                        action['time'] = self.actions[-1].get('time', 0) + 0.5
 
                     self.actions.insert(insert_pos, action)
                     self._invalidate_relative_delay_cache()
@@ -3566,9 +3570,19 @@ class AutoTestGUI:
                         insert_pos = len(self.actions)
 
                     if insert_pos > 0 and self.actions:
-                        action['time'] = self.actions[insert_pos - 1].get('time', 0)
+                        prev_time = self.actions[insert_pos - 1].get('time', 0)
+                        # 根据延时类型计算新动作的time
+                        if delay_type == "random":
+                            action['time'] = prev_time + action.get('min_delay', 0)
+                        elif delay_type == "multiply":
+                            action['time'] = prev_time + action.get('base_delay', 0)
+                        else:  # arithmetic
+                            action['time'] = prev_time + action.get('start_delay', 0)
 
                     self.actions.insert(insert_pos, action)
+                    # 调整后续动作的time
+                    shift = action.get('min_delay', 0) if delay_type == "random" else (action.get('base_delay', 0) if delay_type == "multiply" else action.get('start_delay', 0))
+                    self._shift_action_times(insert_pos + 1, shift)
                     self._update_action_list(select_index=insert_pos)
 
                 self.in_dialog_operation = False
