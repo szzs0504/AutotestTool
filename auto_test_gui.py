@@ -305,9 +305,21 @@ class AutoTestGUI:
         self._drag_start_pos = None
         self._drag_start_idx = None
         self._is_dragging = False
+        # 拖动视觉效果相关
+        self._drag_indicator = None  # 拖动指示器（抓手当蓝色效果）
+        self._drag_placeholder = None  # 拖动占位符
+        self._drag_over_item = None   # 当前悬停在哪一行
+        # 定义拖动抓手当宽度
+        self._GRAB_HANDLE_WIDTH = 50
+        self._GRAB_HANDLE_ICON = "☰"  # 抓手当符号（手型）
+        self.action_tree.tag_configure('drag_handle', background='#0078D7')  # 蓝色抓手当效果
+        self.action_tree.tag_configure('drag_over', background='#E5F3FF')    # 悬停时蓝色背景
+        self.action_tree.tag_configure('placeholder', background='#F0F0F0')  # 占位符灰色
+        self.action_tree.tag_configure('grab_handle', font='')  # 抓手当标签
         self.action_tree.bind("<Button-1>", self._on_drag_start, add=True)
         self.action_tree.bind("<B1-Motion>", self._on_drag_motion, add=True)
         self.action_tree.bind("<ButtonRelease-1>", self._on_drag_end, add=True)
+        self.action_tree.bind("<Motion>", self._on_tree_motion)  # 鼠标移动事件用于改变光标
 
         scrollbar.config(command=self.action_tree.yview)
         self.action_scrollbar = scrollbar
@@ -1596,6 +1608,15 @@ class AutoTestGUI:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 self.actions = json.load(f)
+            # 为每个动作设置 display_delay
+            for i, action in enumerate(self.actions):
+                if 'display_delay' not in action:
+                    if i == 0:
+                        action['display_delay'] = action.get('time', 0)
+                    else:
+                        prev_time = self.actions[i - 1].get('time', 0)
+                        curr_time = action.get('time', 0)
+                        action['display_delay'] = curr_time - prev_time
             self._update_action_list()  # 更新动作列表显示
             messagebox.showinfo("成功", "动作已加载！")
         except Exception as e:
@@ -1609,20 +1630,28 @@ class AutoTestGUI:
         self._hide_delay_spinbox()
         previous_selection = [int(self.action_tree.index(item)) for item in self.action_tree.selection()] if self.action_tree.selection() else []
 
+        # 保存当前展开状态
+        expanded_items = set()
+        for item in self.action_tree.get_children():
+            if self.action_tree.item(item, 'open'):
+                expanded_items.add(item)
+
         for item in self.action_tree.get_children():
             self.action_tree.delete(item)
 
         idx = 0
         while idx < len(self.actions):
             action = self.actions[idx]
-            action_text = self._describe_action(action)
+            action_text = f"{self._GRAB_HANDLE_ICON} {self._describe_action(action)}"
             delay_text = self._format_delay_text(idx)
             remark_text = action.get('remark', '')
 
             if action['type'] == 'loop_group':
                 # 循环组：使用树形结构显示，支持展开
                 parent_id = f"loop_{idx}"
-                self.action_tree.insert("", tk.END, iid=parent_id, values=(action_text, delay_text, remark_text), open=False)
+                # 恢复展开状态
+                is_expanded = parent_id in expanded_items
+                self.action_tree.insert("", tk.END, iid=parent_id, values=(action_text, delay_text, remark_text), open=is_expanded)
                 # 递归添加内部动作
                 loop_actions = action.get('loop_actions', [])
                 self._add_loop_actions_to_tree(parent_id, loop_actions, idx, scroll_to_end, select_index, previous_selection)
@@ -1630,7 +1659,9 @@ class AutoTestGUI:
             elif action['type'] == 'input_loop':
                 # 输入循环：使用树形结构显示，支持展开
                 parent_id = f"input_loop_{idx}"
-                self.action_tree.insert("", tk.END, iid=parent_id, values=(action_text, delay_text, remark_text), open=False)
+                # 恢复展开状态
+                is_expanded = parent_id in expanded_items
+                self.action_tree.insert("", tk.END, iid=parent_id, values=(action_text, delay_text, remark_text), open=is_expanded)
                 # 递归添加内部动作
                 loop_actions = action.get('loop_actions', [])
                 self._add_loop_actions_to_tree(parent_id, loop_actions, idx, scroll_to_end, select_index, previous_selection)
@@ -1676,7 +1707,8 @@ class AutoTestGUI:
 
     def _add_loop_actions_to_tree(self, parent_id, loop_actions, parent_idx, scroll_to_end=False, select_index=None, previous_selection=None, depth=0):
         """递归添加循环组内的动作到树形结构"""
-        indent = "  " * depth  # 根据深度添加缩进
+        # 循环组内的动作缩进4个字符
+        indent = "    " if depth == 0 else "        "
 
         for j, loop_action in enumerate(loop_actions):
             action_type = loop_action.get('type', '')
@@ -1685,7 +1717,7 @@ class AutoTestGUI:
                 loop_text = self._describe_action(loop_action)
                 loop_remark = loop_action.get('remark', '')
                 nested_parent_id = f"{parent_id}_{j}"
-                self.action_tree.insert(parent_id, tk.END, iid=nested_parent_id, values=(indent + loop_text, "", loop_remark), open=False)
+                self.action_tree.insert(parent_id, tk.END, iid=nested_parent_id, values=(indent + f"{self._GRAB_HANDLE_ICON} {loop_text}", "", loop_remark), open=False)
                 # 递归添加嵌套循环组的动作
                 nested_loop_actions = loop_action.get('loop_actions', [])
                 self._add_loop_actions_to_tree(nested_parent_id, nested_loop_actions, parent_idx, None, None, None, depth + 1)
@@ -1702,7 +1734,7 @@ class AutoTestGUI:
                     curr_time = loop_action.get('time', 0)
                     delay_text = f"{curr_time - prev_time:.1f}s"
 
-                self.action_tree.insert(parent_id, tk.END, iid=f"{parent_id}_{j}", values=(indent + action_text, delay_text, loop_remark))
+                self.action_tree.insert(parent_id, tk.END, iid=f"{parent_id}_{j}", values=(indent + f"{self._GRAB_HANDLE_ICON} {action_text}", delay_text, loop_remark))
 
         # 恢复选择状态（只在顶层调用）
         if previous_selection is not None:
@@ -1816,6 +1848,9 @@ class AutoTestGUI:
 
     def _format_delay_text(self, index):
         action = self.actions[index]
+        # 如果动作有 display_delay 字段，直接使用它（跟着动作本身）
+        if 'display_delay' in action:
+            return f"{action['display_delay']:.1f}s"
         if action['type'] == 'random_delay':
             return f"{action.get('min_delay', 0):.1f}-{action.get('max_delay', 0):.1f}s"
         if action['type'] == 'multiply_delay':
@@ -1891,6 +1926,49 @@ class AutoTestGUI:
         """使相对延时缓存失效"""
         self._relative_delay_cache = {}
         self._relative_delay_valid = False
+
+    def _rebuild_action_times(self, action_time_map=None, actions_list_before=None):
+        """重建所有动作的 time 字段，设置 display_delay 保持显示延时不变
+
+        display_delay 跟着动作本身移动，排序后显示的延时保持不变。
+        """
+        if not self.actions:
+            return
+
+        if action_time_map is None:
+            return
+
+        # 使用排序前的列表来计算显示延时
+        if actions_list_before is None:
+            actions_list_before = list(self.actions)
+
+        # 记录排序前每个动作的显示延时
+        # 显示延时 = 当前动作的 time - 前一个动作的 time
+        action_display_delays = {}
+        for i, action in enumerate(actions_list_before):
+            action_id = id(action)
+            if i == 0:
+                # 第一个动作的显示延时就是它的 time
+                action_display_delays[action_id] = action_time_map.get(action_id, 0)
+            else:
+                prev_action = actions_list_before[i - 1]
+                prev_action_id = id(prev_action)
+                curr_time = action_time_map.get(action_id, 0)
+                prev_time = action_time_map.get(prev_action_id, 0)
+                action_display_delays[action_id] = curr_time - prev_time
+
+        # 排序后，设置每个动作的 display_delay（跟着动作本身）
+        # 同时计算新的 time 值（绝对时间）
+        cumulative_time = 0
+        for action in self.actions:
+            action_id = id(action)
+            display_delay = action_display_delays.get(action_id, 0)
+            action['display_delay'] = display_delay
+            cumulative_time += display_delay
+            action['time'] = cumulative_time
+
+        # 使缓存失效
+        self._invalidate_relative_delay_cache()
 
     def _get_selected_indices(self):
         """获取选中的动作索引，支持顶层动作和嵌套循环组内的动作"""
@@ -2008,6 +2086,29 @@ class AutoTestGUI:
         # 检测Ctrl键：使用event.state
         ctrl_pressed = (event.state & 0x4) != 0 or (event.state & 0x80) != 0 or (event.state & 0x100) != 0
 
+        # 首先检测是否点击了抓手当区域（动作列的前50像素）
+        column = self.action_tree.identify_column(event.x)
+        if column == "#1" and event.x <= self._GRAB_HANDLE_WIDTH and '_' not in row_id:
+            # 点击了抓手当区域，开始拖动
+            self._drag_start_item = row_id
+            self._drag_start_pos = (event.x, event.y)
+            self._is_dragging = True
+            try:
+                self._drag_start_idx = int(row_id)
+            except ValueError:
+                self._drag_start_idx = None
+            # 清除之前的拖动效果
+            self._clear_drag_visual()
+            # 添加抓手当蓝色效果
+            current_tags = self.action_tree.item(row_id, 'tags')
+            if current_tags:
+                self.action_tree.item(row_id, tags=current_tags + ('drag_handle',))
+            else:
+                self.action_tree.item(row_id, tags=('drag_handle',))
+            self._drag_indicator = row_id
+            # 阻止Treeview处理这个点击
+            return 'break'
+
         if ctrl_pressed:
             # Ctrl+拖动：多选模式，记录起始位置
             self._drag_start_item = row_id
@@ -2015,7 +2116,7 @@ class AutoTestGUI:
             self._is_dragging = False
             self._drag_start_idx = None
         elif row_id.startswith('loop_') or row_id.startswith('input_loop_'):
-            # 循环组内的动作：可以多选但不能拖动排序
+            # 循环组内的动作：阻止Treeview的展开/合并行为，但标记为已处理
             self._drag_start_item = row_id
             self._drag_start_pos = (event.x, event.y)
             self._is_dragging = False
@@ -2028,6 +2129,8 @@ class AutoTestGUI:
                     self._drag_start_idx = None
             except (ValueError, IndexError):
                 self._drag_start_idx = None
+            # 阻止Treeview处理这个点击（防止触发展开/合并）
+            return 'break'
         elif '_' not in row_id:
             # 普通拖动：排序模式
             self._drag_start_item = row_id
@@ -2070,6 +2173,26 @@ class AutoTestGUI:
                 row_id = self.action_tree.identify_row(event.y)
                 if row_id:
                     self.action_tree.see(row_id)
+
+        # 更新拖动视觉效果
+        if self._is_dragging and self._drag_indicator:
+            current_row = self.action_tree.identify_row(event.y)
+            if current_row and current_row != self._drag_indicator:
+                # 清除之前的悬停效果
+                if self._drag_over_item and self._drag_over_item != self._drag_indicator:
+                    current_tags = self.action_tree.item(self._drag_over_item, 'tags')
+                    if current_tags:
+                        new_tags = tuple(t for t in current_tags if t not in ('drag_over',))
+                        self.action_tree.item(self._drag_over_item, tags=new_tags)
+                # 添加新的悬停效果
+                if current_row != self._drag_indicator:
+                    current_tags = self.action_tree.item(current_row, 'tags')
+                    if current_tags:
+                        new_tags = current_tags + ('drag_over',)
+                    else:
+                        new_tags = ('drag_over',)
+                    self.action_tree.item(current_row, tags=new_tags)
+                self._drag_over_item = current_row
 
     def _on_drag_end(self, event):
         """结束拖动，重新排序或多选"""
@@ -2125,12 +2248,32 @@ class AutoTestGUI:
                     loop_actions = parent_action.get('loop_actions', [])
 
                     if 0 <= start_child_idx < len(loop_actions) and 0 <= end_child_idx < len(loop_actions) and start_child_idx != end_child_idx:
+                        # 在 pop/insert 之前，记录每个动作的 time 和 display_delay
+                        action_time_map = {}
+                        action_display_map = {}
+                        for i, loop_action in enumerate(loop_actions):
+                            action_time_map[id(loop_action)] = loop_action.get('time', 0)
+                            # 计算原始 display_delay
+                            if i == 0:
+                                action_display_map[id(loop_action)] = loop_action.get('time', 0)
+                            else:
+                                prev_time = loop_actions[i - 1].get('time', 0)
+                                curr_time = loop_action.get('time', 0)
+                                action_display_map[id(loop_action)] = curr_time - prev_time
+
+                        # 执行排序
                         action = loop_actions.pop(start_child_idx)
-                        if end_child_idx > start_child_idx:
-                            insert_pos = end_child_idx - 1
-                        else:
-                            insert_pos = end_child_idx
-                        loop_actions.insert(insert_pos, action)
+                        loop_actions.insert(end_child_idx, action)
+
+                        # 重新计算 time 和 display_delay
+                        cumulative = 0
+                        for loop_action in loop_actions:
+                            action_id = id(loop_action)
+                            display_delay = action_display_map.get(action_id, 0)
+                            cumulative += display_delay
+                            loop_action['time'] = cumulative
+                            loop_action['display_delay'] = display_delay
+
                         self._update_action_list(select_index=parent_idx)
                 except (ValueError, IndexError):
                     pass
@@ -2145,12 +2288,35 @@ class AutoTestGUI:
                 # 顶层动作的排序
                 try:
                     start_idx = int(self._drag_start_item)
-                    end_idx = int(row_id)
+                    # 如果 row_id 为 None（拖动到空白区域），则移动到最后
+                    if row_id is None:
+                        end_idx = len(self.actions) - 1  # 目标位置是最后
+                    else:
+                        end_idx = int(row_id)
 
-                    if 0 <= start_idx < len(self.actions) and 0 <= end_idx < len(self.actions) and start_idx != end_idx:
-                        action = self.actions.pop(start_idx)
-                        insert_pos = end_idx if end_idx < start_idx else end_idx - 1
+                    if 0 <= start_idx < len(self.actions) and start_idx != end_idx:
+                        # 限制 end_idx 在有效范围内
+                        end_idx = max(0, min(end_idx, len(self.actions) - 1))
+
+                        # 在 pop/insert 之前，记录每个动作的 time 值
+                        # 用 id(action) 作为键，这样排序后还能找到每个动作原本的 time 值
+                        action_time_map = {}
+                        for action in self.actions:
+                            action_time_map[id(action)] = action.get('time', 0)
+
+                        # 在 pop/insert 之前，记录排序前的列表副本
+                        actions_list_before = list(self.actions)
+
+                        # 记录移动的动作
+                        action = self.actions[start_idx]
+
+                        # 执行 pop 和 insert
+                        self.actions.pop(start_idx)
+                        insert_pos = end_idx if end_idx <= start_idx else end_idx
                         self.actions.insert(insert_pos, action)
+
+                        # 重建 time 字段：根据动作原本的 time 值，重新计算列表中的 time
+                        self._rebuild_action_times(action_time_map, actions_list_before)
                         self._update_action_list(select_index=insert_pos)
                 except (ValueError, IndexError):
                     pass
@@ -2159,6 +2325,37 @@ class AutoTestGUI:
         self._drag_start_pos = None
         self._is_dragging = False
         self._drag_start_idx = None
+        # 清除拖动视觉效果
+        self._clear_drag_visual()
+
+    def _clear_drag_visual(self):
+        """清除拖动视觉效果"""
+        # 清除抓手当蓝色效果
+        if self._drag_indicator:
+            current_tags = self.action_tree.item(self._drag_indicator, 'tags')
+            if current_tags:
+                new_tags = tuple(t for t in current_tags if t not in ('drag_handle', 'drag_over'))
+                self.action_tree.item(self._drag_indicator, tags=new_tags)
+            self._drag_indicator = None
+        # 清除悬停蓝色背景效果
+        if self._drag_over_item:
+            current_tags = self.action_tree.item(self._drag_over_item, 'tags')
+            if current_tags:
+                new_tags = tuple(t for t in current_tags if t not in ('drag_handle', 'drag_over'))
+                self.action_tree.item(self._drag_over_item, tags=new_tags)
+            self._drag_over_item = None
+
+    def _on_tree_motion(self, event):
+        """鼠标移动事件，用于在抓手当区域显示手型光标"""
+        if self.drag_locked.get():
+            return
+        column = self.action_tree.identify_column(event.x)
+        row_id = self.action_tree.identify_row(event.y)
+        # 只有在动作列的前50像素区域内且是顶层动作时才显示手型
+        if column == "#1" and event.x <= self._GRAB_HANDLE_WIDTH and row_id and '_' not in row_id:
+            self.action_tree.config(cursor="hand1")
+        else:
+            self.action_tree.config(cursor="")
 
     def on_tree_double_click(self, event):
         column = self.action_tree.identify_column(event.x)

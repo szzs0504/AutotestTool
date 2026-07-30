@@ -6299,7 +6299,7 @@ class AutoTestGUI:
                     min_delay = min_var.get()
                     max_delay = max_var.get()
                     if min_delay < 0 or max_delay < min_delay:
-                        raise ValueError("无效的延时范围")
+                        raise ValueError("无效的延时范围"iiancha
                     action['min_delay'] = min_delay
                     action['max_delay'] = max_delay
                     self._update_action_list()
