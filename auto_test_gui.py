@@ -2948,8 +2948,8 @@ class AutoTestGUI:
         # 获取当前选中项
         selection = self._get_selected_indices()
 
-        # 计算相对延时
-        relative_delay = 0
+        # 计算相对延时（用于对话框显示）
+        relative_delay = 0.5  # 默认0.5秒
         insert_pos = len(self.actions)
 
         # 检查是否选择了循环组内的动作
@@ -2958,8 +2958,10 @@ class AutoTestGUI:
             int_indices = [s for s in selection if isinstance(s, int)]
             if int_indices:
                 insert_pos = int_indices[-1] + 1
-                if insert_pos > 0 and 'time' in self.actions[insert_pos - 1]:
-                    relative_delay = self.actions[insert_pos - 1].get('time', 0)
+                if insert_pos > 0:
+                    prev_action = self.actions[insert_pos - 1]
+                    # 使用 display_delay（动作列表显示的相对延时）
+                    relative_delay = prev_action.get('display_delay', 0.5)
 
         dialog = tk.Toplevel(self.root)
         dialog.title("插入点击")
