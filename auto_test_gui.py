@@ -979,9 +979,17 @@ class AutoTestGUI:
 
         action_type = action.get('type')
         if action_type == 'click':
+            # 延时在点击之前发生
+            delay = action.get('delay', 0)
+            if delay > 0:
+                time.sleep(delay)
             pyautogui.moveTo(action['x'], action['y'], duration=0.1)
             pyautogui.click(x=action['x'], y=action['y'])
         elif action_type == 'doubleclick':
+            # 延时在点击之前发生
+            delay = action.get('delay', 0)
+            if delay > 0:
+                time.sleep(delay)
             pyautogui.moveTo(action['x'], action['y'], duration=0.1)
             pyautogui.doubleClick(x=action['x'], y=action['y'])
         elif action_type == 'keyboard':
@@ -1015,6 +1023,7 @@ class AutoTestGUI:
             time.sleep(delay)
         elif action_type == 'delay':
             # 延时动作
+            print(f"[DEBUG] 执行延时动作, action: {action}")
             delay_mode = action.get('delay_mode', 'fixed')
             if delay_mode == 'list':
                 # 列表模式：按顺序遍历，循环往复
@@ -1023,7 +1032,9 @@ class AutoTestGUI:
             else:
                 # 固定模式
                 delay = action.get('delay', 0)
+            print(f"[DEBUG] 延时值: {delay}")
             if delay > 0:
+                print(f"[DEBUG] 执行 time.sleep({delay})")
                 time.sleep(delay)
         elif action_type == 'loop_group':
             # 嵌套循环组：执行内部动作
@@ -1285,17 +1296,25 @@ class AutoTestGUI:
                                 return
 
                     if action['type'] == 'move':
-                        next_is_click = (i < len(self.actions) - 1 and 
+                        self.update_playback_info(f"移动到 ({action['x']}, {action['y']})")
+                        next_is_click = (i < len(self.actions) - 1 and
                                        self.actions[i + 1]['type'] in ['click', 'doubleclick'])
                         if next_is_click:
                             pyautogui.moveTo(action['x'], action['y'], duration=0.2)
                     elif action['type'] == 'click':
+                        delay = action.get('delay', 0)
+                        delay_info = f", 延时{delay}s" if delay > 0 else ""
+                        self.update_playback_info(f"单击 ({action['x']}, {action['y']}){delay_info}")
                         pyautogui.moveTo(action['x'], action['y'], duration=0.2)
                         pyautogui.click(x=action['x'], y=action['y'])
                     elif action['type'] == 'doubleclick':
+                        delay = action.get('delay', 0)
+                        delay_info = f", 延时{delay}s" if delay > 0 else ""
+                        self.update_playback_info(f"双击 ({action['x']}, {action['y']}){delay_info}")
                         pyautogui.moveTo(action['x'], action['y'], duration=0.2)
                         pyautogui.doubleClick(x=action['x'], y=action['y'])
                     elif action['type'] == 'input':
+                        self.update_playback_info(f"输入: {action.get('text', '')[:30]}...")
                         pyautogui.moveTo(action['x'], action['y'], duration=0.2)
                         pyautogui.click(x=action['x'], y=action['y'])
                         time.sleep(0.1)
@@ -1306,9 +1325,11 @@ class AutoTestGUI:
                         # 输入文本
                         pyautogui.write(action.get('text', ''), interval=0.05)
                     elif action['type'] == 'keyboard':
+                        self.update_playback_info(f"按键: {action['keys']}")
                         keys = [k.lower() for k in action['keys']]
                         self.execute_keyboard_action(keys)
                     elif action['type'] == 'scroll':
+                        self.update_playback_info(f"滚动 {action.get('dy', 0)}")
                         pyautogui.moveTo(action['x'], action['y'], duration=0.2)
                         scroll_amount = int(action['dy'] * 100)
                         if scroll_amount != 0:
@@ -1345,8 +1366,10 @@ class AutoTestGUI:
                         )
                     elif action['type'] == 'loop_group':
                         # 循环组：执行选中动作N次
+                        print(f"[DEBUG] 找到循环组, 内容: {action}")
                         loop_count = action.get('loop_count', 1)
                         loop_actions = action.get('loop_actions', [])
+                        print(f"[DEBUG] 循环组内动作数量: {len(loop_actions)}")
                         interval_type = action.get('loop_interval_type', 'fixed')
                         interval_params = action.get('loop_interval', {})
 
@@ -1357,10 +1380,30 @@ class AutoTestGUI:
                         for loop_idx in range(loop_count):
                             if not self.is_playing:
                                 return
+                            self.update_playback_info(f"循环组 第{loop_idx+1}/{loop_count}轮")
                             # 执行循环动作
                             for loop_action in loop_actions:
                                 if not self.is_playing:
                                     return
+                                action_type = loop_action.get('type', '')
+                                action_delay = loop_action.get('delay', 0)
+                                delay_info = f", 延时{action_delay}s" if action_delay > 0 else ""
+                                # 根据动作类型生成描述
+                                if action_type == 'click':
+                                    desc = f"单击 ({loop_action.get('x')}, {loop_action.get('y')}){delay_info}"
+                                elif action_type == 'doubleclick':
+                                    desc = f"双击 ({loop_action.get('x')}, {loop_action.get('y')}){delay_info}"
+                                elif action_type == 'keyboard':
+                                    desc = f"按键 {loop_action.get('keys', [])}"
+                                elif action_type == 'scroll':
+                                    desc = f"滚动 {loop_action.get('dy', 0)}"
+                                elif action_type == 'move':
+                                    desc = f"移动到 ({loop_action.get('x')}, {loop_action.get('y')})"
+                                elif action_type == 'input':
+                                    desc = f"输入: {loop_action.get('text', '')[:20]}"
+                                else:
+                                    desc = action_type
+                                self.update_playback_info(f"  → {desc}")
                                 self._execute_single_action(loop_action, loop_idx)
 
                             # 循环间隔
@@ -1763,18 +1806,7 @@ class AutoTestGUI:
             return f"等差延时 (起始: {action.get('start_delay', 0):.1f}s, 步距: {action.get('step_delay', 0):.1f}s)"
         if action_type == 'loop_group':
             loop_count = action.get('loop_count', 1)
-            interval_params = action.get('loop_interval', {})
-            interval_type = action.get('loop_interval_type', 'fixed')
-            if interval_type == 'fixed':
-                interval_str = f"固定{interval_params.get('value', 0)}秒"
-            elif interval_type == 'range':
-                interval_str = f"范围{interval_params.get('min', 0)}-{interval_params.get('max', 0)}秒"
-            elif interval_type == 'list':
-                values = interval_params.get('values', [])
-                interval_str = f"列表{values}"
-            else:  # random
-                interval_str = f"随机{interval_params.get('min', 0)}-{interval_params.get('max', 0)}秒"
-            return f"循环组 (执行{loop_count}次,{interval_str})"
+            return f"循环组 (执行{loop_count}次)"
         if action_type == 'input_loop':
             loop_type = action.get('loop_type', 'fixed')
             template = action.get('input_template', '')
@@ -3670,10 +3702,6 @@ class AutoTestGUI:
                             loop_count_var.set(loop_count)
                             break
 
-                # 使用固定间隔，默认0.5秒
-                interval_type = "fixed"
-                interval_params = {'type': 'fixed', 'value': 0.5}
-
                 if is_loop_inner:
                     parent_action = self.actions[parent_loop_idx]
                     loop_actions = parent_action.setdefault('loop_actions', [])
@@ -3682,8 +3710,6 @@ class AutoTestGUI:
                     nested_loop = {
                         'type': 'loop_group',
                         'loop_count': loop_count,
-                        'loop_interval_type': interval_type,
-                        'loop_interval': interval_params,
                         'loop_actions': selected_actions,
                         'time': 0
                     }
@@ -3696,8 +3722,6 @@ class AutoTestGUI:
                     action = {
                         'type': 'loop_group',
                         'loop_count': loop_count,
-                        'loop_interval_type': interval_type,
-                        'loop_interval': interval_params,
                         'loop_actions': loop_actions_selected,
                         'time': self.actions[start_idx].get('time', 0) if self.actions else 0
                     }
