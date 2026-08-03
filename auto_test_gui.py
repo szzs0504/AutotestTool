@@ -306,7 +306,7 @@ class AutoTestGUI:
         self._drag_over_item = None   # 当前悬停在哪一行
         # 定义拖动抓手当宽度
         self._GRAB_HANDLE_WIDTH = 50
-        self._GRAB_HANDLE_ICON = "☰"  # 抓手当符号（手型）
+        self._GRAB_HANDLE_ICON = "✋"  # 抓手符号（手型）
         self.action_tree.tag_configure('drag_handle', background='#0078D7')  # 蓝色抓手当效果
         self.action_tree.tag_configure('drag_over', background='#E5F3FF')    # 悬停时蓝色背景
         self.action_tree.tag_configure('placeholder', background='#F0F0F0')  # 占位符灰色
@@ -1795,11 +1795,19 @@ class AutoTestGUI:
         self._hide_delay_spinbox()
         previous_selection = [int(self.action_tree.index(item)) for item in self.action_tree.selection()] if self.action_tree.selection() else []
 
-        # 保存当前展开状态
+        # 保存当前展开状态（递归采集所有层级的展开状态）
         expanded_items = set()
-        for item in self.action_tree.get_children():
-            if self.action_tree.item(item, 'open'):
-                expanded_items.add(item)
+
+        def collect_expanded_items(parent=''):
+            """递归采集所有层级的展开状态"""
+            children = self.action_tree.get_children(parent) if parent else self.action_tree.get_children()
+            for item in children:
+                if self.action_tree.item(item, 'open'):
+                    expanded_items.add(item)
+                # 递归检查子项
+                collect_expanded_items(item)
+
+        collect_expanded_items()
 
         for item in self.action_tree.get_children():
             self.action_tree.delete(item)
@@ -1819,7 +1827,7 @@ class AutoTestGUI:
                 self.action_tree.insert("", tk.END, iid=parent_id, values=(action_text, delay_text, remark_text), open=is_expanded)
                 # 递归添加内部动作
                 loop_actions = action.get('loop_actions', [])
-                self._add_loop_actions_to_tree(parent_id, loop_actions, idx, scroll_to_end, select_index, previous_selection)
+                self._add_loop_actions_to_tree(parent_id, loop_actions, idx, scroll_to_end, select_index, previous_selection, expanded_items)
                 idx += 1
             elif action['type'] == 'input_loop':
                 # 输入循环：使用树形结构显示，支持展开
@@ -1829,7 +1837,7 @@ class AutoTestGUI:
                 self.action_tree.insert("", tk.END, iid=parent_id, values=(action_text, delay_text, remark_text), open=is_expanded)
                 # 递归添加内部动作
                 loop_actions = action.get('loop_actions', [])
-                self._add_loop_actions_to_tree(parent_id, loop_actions, idx, scroll_to_end, select_index, previous_selection)
+                self._add_loop_actions_to_tree(parent_id, loop_actions, idx, scroll_to_end, select_index, previous_selection, expanded_items)
                 idx += 1
             elif action['type'] == 'numeric_loop':
                 # 数值循环显示
@@ -1838,6 +1846,12 @@ class AutoTestGUI:
             else:
                 self.action_tree.insert("", tk.END, iid=str(idx), values=(action_text, delay_text, remark_text))
                 idx += 1
+
+        # 如果有 select_index（row_id），确保其所有祖先都是展开的
+        if select_index is not None and isinstance(select_index, str):
+            self.action_tree.update_idletasks()
+            self._expand_ancestors(select_index)
+            self.action_tree.update_idletasks()
 
         # 如果没有循环组执行递归调用，在这里执行选择逻辑
         has_loop_group = any(a.get('type') in ['loop_group', 'input_loop'] for a in self.actions)
@@ -1850,27 +1864,50 @@ class AutoTestGUI:
     def _restore_selection(self, scroll_to_end, select_index, previous_selection):
         """恢复选择状态"""
         target_selection = None
-        if select_index is not None and 0 <= select_index < len(self.actions):
-            target_selection = (select_index,)
-        elif previous_selection:
-            target_selection = tuple(i for i in previous_selection if i < len(self.actions))
+        if select_index is not None:
+            if isinstance(select_index, str):
+                # select_index 是 row_id（如 'loop_0_1'），直接使用
+                target_selection = (select_index,)
+            elif 0 <= select_index < len(self.actions):
+                # select_index 是顶层动作索引，转换为字符串item ID
+                target_selection = (str(select_index),)
+        # 注意：previous_selection 基于旧树的索引，在树重建后可能指向错误的项
+        # 如果 select_index 已提供（使用 row_id），则不依赖 previous_selection
 
         if self.action_tree.selection():
             self.action_tree.selection_remove(self.action_tree.selection())
         if target_selection:
-            new_selection = [str(idx) for idx in target_selection if self.action_tree.exists(str(idx))]
-            if not new_selection and target_selection:
-                fallback = str(target_selection[0])
-                if self.action_tree.exists(fallback):
-                    new_selection = [fallback]
-            if new_selection:
-                self.action_tree.selection_set(new_selection)
-                self.action_tree.see(new_selection[0])
+            self.action_tree.selection_set(target_selection)
+            self.action_tree.see(target_selection[0])
         elif scroll_to_end and self.actions:
             last_item = self.action_tree.get_children()[-1]
             self.action_tree.see(last_item)
 
-    def _add_loop_actions_to_tree(self, parent_id, loop_actions, parent_idx, scroll_to_end=False, select_index=None, previous_selection=None, depth=0):
+    def _expand_ancestors(self, row_id):
+        """展开row_id的所有祖先循环组，确保该项在树中可见"""
+        if not row_id:
+            return True
+        # 解析row_id，确定需要展开的祖先
+        # loop_0_1_2_3 需要展开 loop_0, loop_0_1, loop_0_1_2 (前缀长度2,3,4)
+        # input_loop_0_1_2 需要展开 input_loop_0, input_loop_0_1 (前缀长度3,4)
+        if row_id.startswith('loop_') or row_id.startswith('input_loop_'):
+            parts = row_id.split('_')
+            ancestors = []
+            # 构建所有可能的祖先ID，前缀长度从2到len(parts)-1
+            i = 2
+            while i < len(parts):
+                prefix = '_'.join(parts[:i])
+                if prefix.startswith('loop_') or prefix.startswith('input_loop_'):
+                    ancestors.append(prefix)
+                i += 1
+            # 从根到叶依次展开
+            for ancestor in ancestors:
+                if self.action_tree.exists(ancestor):
+                    self.action_tree.item(ancestor, open=True)
+            return True
+        return True
+
+    def _add_loop_actions_to_tree(self, parent_id, loop_actions, parent_idx, scroll_to_end=False, select_index=None, previous_selection=None, expanded_items=None, depth=0):
         """递归添加循环组内的动作到树形结构"""
         # 循环组内的动作缩进4个字符
         indent = "    " if depth == 0 else "        "
@@ -1882,10 +1919,12 @@ class AutoTestGUI:
                 loop_text = self._describe_action(loop_action)
                 loop_remark = loop_action.get('remark', '')
                 nested_parent_id = f"{parent_id}_{j}"
-                self.action_tree.insert(parent_id, tk.END, iid=nested_parent_id, values=(indent + f"{self._GRAB_HANDLE_ICON} {loop_text}", "", loop_remark), open=False)
+                # 恢复展开状态
+                is_expanded = expanded_items is not None and nested_parent_id in expanded_items
+                self.action_tree.insert(parent_id, tk.END, iid=nested_parent_id, values=(indent + f"{self._GRAB_HANDLE_ICON} {loop_text}", "", loop_remark), open=is_expanded)
                 # 递归添加嵌套循环组的动作
                 nested_loop_actions = loop_action.get('loop_actions', [])
-                self._add_loop_actions_to_tree(nested_parent_id, nested_loop_actions, parent_idx, None, None, None, depth + 1)
+                self._add_loop_actions_to_tree(nested_parent_id, nested_loop_actions, parent_idx, None, None, None, expanded_items, depth + 1)
             else:
                 # 普通动作 - 直接使用 delay 字段
                 action_text = self._describe_action(loop_action)
@@ -1894,9 +1933,14 @@ class AutoTestGUI:
 
                 self.action_tree.insert(parent_id, tk.END, iid=f"{parent_id}_{j}", values=(indent + f"{self._GRAB_HANDLE_ICON} {action_text}", delay_text, loop_remark))
 
-        # 恢复选择状态（只在顶层调用）
-        if previous_selection is not None:
-            self._restore_selection(scroll_to_end, select_index, previous_selection)
+        # 恢复选择状态 - 只有当 select_index 属于此循环组时才恢复
+        if previous_selection is not None and select_index is not None:
+            # select_index 可能是：'loop_0'(直接是父级) 或 'loop_0_1'(子项) 或 '2'(顶层索引)
+            # 只有当 select_index 属于这个 parent_id 时才恢复
+            is_my_item = (select_index == parent_id or
+                         (isinstance(select_index, str) and select_index.startswith(parent_id + '_')))
+            if is_my_item:
+                self._restore_selection(scroll_to_end, select_index, previous_selection)
 
     def _describe_action(self, action):
         action_type = action['type']
@@ -2240,14 +2284,27 @@ class AutoTestGUI:
 
         # 首先检测是否点击了抓手当区域（动作列的前50像素）
         column = self.action_tree.identify_column(event.x)
-        if column == "#1" and event.x <= self._GRAB_HANDLE_WIDTH and '_' not in row_id:
-            # 点击了抓手当区域，开始拖动
+        # 检查是否是可拖动的动作项：顶层动作（无下划线）或嵌套循环组内的动作
+        # 嵌套动作row_id格式: loop_0_1_2_3 或 loop_0_1_2_loop_3 等
+        is_action = (('_' not in row_id) or
+                     row_id.startswith('loop_') or
+                     row_id.startswith('input_loop_'))
+        if column == "#1" and event.x <= self._GRAB_HANDLE_WIDTH and is_action:
+            # 点击了抓当真当区域，开始拖动
             self._drag_start_item = row_id
             self._drag_start_pos = (event.x, event.y)
             self._is_dragging = True
+            # 对于嵌套循环组动作（如loop_0_1_2_3），从row_id解析索引
             try:
-                self._drag_start_idx = int(row_id)
-            except ValueError:
+                if row_id.startswith('loop_') or row_id.startswith('input_loop_'):
+                    parts = row_id.split('_')
+                    if len(parts) >= 2:
+                        self._drag_start_idx = int(parts[-1])
+                    else:
+                        self._drag_start_idx = None
+                else:
+                    self._drag_start_idx = int(row_id)
+            except (ValueError, IndexError):
                 self._drag_start_idx = None
             # 清除之前的拖动效果
             self._clear_drag_visual()
@@ -2388,47 +2445,68 @@ class AutoTestGUI:
             row_parts = row_id.split('_')
             is_end_inner = len(row_parts) >= 3 and (row_parts[0] in ('loop', 'input_loop'))
 
-            # 如果开始和结束都在同一个循环组内，允许排序
-            if is_start_inner and is_end_inner and start_parts[0] == row_parts[0] and start_parts[1] == row_parts[1]:
-                # 同一个循环组内的排序
-                try:
-                    parent_idx = int(start_parts[1])
-                    start_child_idx = int(start_parts[2])
-                    end_child_idx = int(row_parts[2])
+            # 如果开始和结束都在同一个直接循环组内，允许排序
+            if is_start_inner and is_end_inner:
+                # 获取直接父级循环组ID
+                # row_id格式: loop_0_1_2_3 表示父级loop_0_1_2下的第3个动作
+                def get_direct_parent_id(row_id):
+                    """获取直接父级循环组的row_id"""
+                    if row_id.startswith('loop_') or row_id.startswith('input_loop_'):
+                        parts = row_id.split('_')
+                        # 最后一个部分可能是动作索引（数字）
+                        # 倒数第二个部分如果是'loop'或'input_loop'，则是嵌套循环组
+                        # 否则直接父级是去掉最后一个索引后的部分
+                        if len(parts) >= 3:
+                            # loop_0_1_2_3 -> parent = loop_0_1_2
+                            return '_'.join(parts[:-1])
+                    return None
 
-                    parent_action = self.actions[parent_idx]
-                    loop_actions = parent_action.get('loop_actions', [])
+                start_parent = get_direct_parent_id(self._drag_start_item)
+                end_parent = get_direct_parent_id(row_id) if row_id else None
 
-                    if 0 <= start_child_idx < len(loop_actions) and 0 <= end_child_idx < len(loop_actions) and start_child_idx != end_child_idx:
-                        # 在 pop/insert 之前，记录每个动作的 time 和 display_delay
-                        action_time_map = {}
-                        action_display_map = {}
-                        for i, loop_action in enumerate(loop_actions):
-                            action_time_map[id(loop_action)] = loop_action.get('time', 0)
-                            # 计算原始 display_delay
-                            if i == 0:
-                                action_display_map[id(loop_action)] = loop_action.get('time', 0)
-                            else:
-                                prev_time = loop_actions[i - 1].get('time', 0)
-                                curr_time = loop_action.get('time', 0)
-                                action_display_map[id(loop_action)] = curr_time - prev_time
+                if start_parent and end_parent and start_parent == end_parent:
+                    # 同一个直接父级循环组内的排序
+                    try:
+                        parent_id = '_'.join(start_parts[:-1])
 
-                        # 执行排序
-                        action = loop_actions.pop(start_child_idx)
-                        loop_actions.insert(end_child_idx, action)
+                        parent_action = self._get_action_by_row_id(parent_id)
+                        if parent_action is None:
+                            parent_action = self._get_parent_loop_action(parent_id)
 
-                        # 重新计算 time 和 display_delay
-                        cumulative = 0
-                        for loop_action in loop_actions:
-                            action_id = id(loop_action)
-                            display_delay = action_display_map.get(action_id, 0)
-                            cumulative += display_delay
-                            loop_action['time'] = cumulative
-                            loop_action['display_delay'] = display_delay
+                        if parent_action is None:
+                            return
 
-                        self._update_action_list(select_index=parent_idx)
-                except (ValueError, IndexError):
-                    pass
+                        loop_actions = parent_action.get('loop_actions', [])
+
+                        start_child_idx = int(start_parts[-1])
+                        end_child_idx = int(row_parts[-1])
+
+                        if 0 <= start_child_idx < len(loop_actions) and 0 <= end_child_idx < len(loop_actions) and start_child_idx != end_child_idx:
+                            action_time_map = {}
+                            action_display_map = {}
+                            for i, loop_action in enumerate(loop_actions):
+                                action_time_map[id(loop_action)] = loop_action.get('time', 0)
+                                if i == 0:
+                                    action_display_map[id(loop_action)] = loop_action.get('time', 0)
+                                else:
+                                    prev_time = loop_actions[i - 1].get('time', 0)
+                                    curr_time = loop_action.get('time', 0)
+                                    action_display_map[id(loop_action)] = curr_time - prev_time
+
+                            action = loop_actions.pop(start_child_idx)
+                            loop_actions.insert(end_child_idx, action)
+
+                            cumulative = 0
+                            for loop_action in loop_actions:
+                                action_id = id(loop_action)
+                                display_delay = action_display_map.get(action_id, 0)
+                                cumulative += display_delay
+                                loop_action['time'] = cumulative
+                                loop_action['display_delay'] = display_delay
+
+                            self._update_action_list(select_index=parent_id)
+                    except (ValueError, IndexError):
+                        pass
             elif '_' in self._drag_start_item and (self._drag_start_item.startswith('loop_') or self._drag_start_item.startswith('input_loop_')):
                 # 循环组内的项不能拖动到循环组外
                 self._drag_start_item = None
@@ -2503,8 +2581,14 @@ class AutoTestGUI:
             return
         column = self.action_tree.identify_column(event.x)
         row_id = self.action_tree.identify_row(event.y)
-        # 只有在动作列的前50像素区域内且是顶层动作时才显示手型
-        if column == "#1" and event.x <= self._GRAB_HANDLE_WIDTH and row_id and '_' not in row_id:
+        # 只有在动作列的前50像素区域内且是可拖动动作时才显示手型
+        is_grabbable = False
+        if row_id:
+            if '_' not in row_id:  # 顶层动作
+                is_grabbable = True
+            elif row_id.startswith('loop_') or row_id.startswith('input_loop_'):  # 循环组内的动作
+                is_grabbable = True
+        if column == "#1" and event.x <= self._GRAB_HANDLE_WIDTH and is_grabbable:
             self.action_tree.config(cursor="hand1")
         else:
             self.action_tree.config(cursor="")
@@ -2641,6 +2725,45 @@ class AutoTestGUI:
             if 0 <= idx < len(self.actions):
                 return self.actions[idx]
         return None
+
+
+    def _get_parent_loop_action(self, row_id):
+        """获取row_id对应的动作的父级循环组动作
+        
+        例如：loop_0_1_action_2 的父级是 loop_0_1（一个循环组动作）
+        例如：loop_0_1 的父级是 loop_0（顶层循环组）
+        返回父级动作对象，如果不存在则返回None
+        """
+        if row_id.startswith('input_loop_'):
+            parts = row_id.split('_')[2:]
+        elif row_id.startswith('loop_'):
+            parts = row_id.split('_')[1:]
+        else:
+            return None
+        
+        if not parts or len(parts) < 2:
+            return None
+        
+        # 获取顶层循环组
+        top_idx = int(parts[0])
+        if top_idx >= len(self.actions):
+            return None
+        action = self.actions[top_idx]
+        
+        # 逐层往下找，直到找到父级（比row_id少一层）
+        # 例如 row_id=loop_0_1_action_2，parts=['0','1','action','2']
+        # 我们要找 loop_0_1，所以遍历到 parts[:-1] = ['0','1']
+        for i in range(1, len(parts) - 1):
+            child_idx = int(parts[i])
+            if action.get('type') in ['loop_group', 'input_loop']:
+                loop_actions = action.get('loop_actions', [])
+            else:
+                return None
+            if child_idx >= len(loop_actions):
+                return None
+            action = loop_actions[child_idx]
+        
+        return action
 
     def _get_parent_loop_info(self, row_id):
         """获取循环组内动作的父循环组信息
@@ -2964,12 +3087,12 @@ class AutoTestGUI:
                 parts = item_id.split('_')[2:]  # 跳过 'input' 和 'loop'
                 if parts:
                     parent_idx = int(parts[0])
-                    self._update_action_list(select_index=parent_idx)
+                    self._update_action_list(select_index=f'input_loop_{parent_idx}')
             elif item_id.startswith('loop_'):
                 parts = item_id.split('_')[1:]  # 跳过 'loop'
                 if parts:
                     parent_idx = int(parts[0])
-                    self._update_action_list(select_index=parent_idx)
+                    self._update_action_list(select_index=f'loop_{parent_idx}')
             elif index is not None:
                 self._update_action_list(select_index=index)
         except ValueError as exc:
@@ -3146,18 +3269,36 @@ class AutoTestGUI:
                 }
 
                 if has_loop_inner:
-                    # 选择的是循环组内的动作 - 先获取索引信息
-                    for s in selection:
-                        if isinstance(s, tuple) and s[0] == 'loop':
-                            parent_loop_idx = s[1]
-                            child_idx = s[2]
-                            break
-                    parent_action = self.actions[parent_loop_idx]
-                    loop_actions = parent_action.setdefault('loop_actions', [])
-
-                    insert_child_pos = child_idx
-                    loop_actions.insert(insert_child_pos, action)
-                    self._update_action_list(select_index=parent_loop_idx)
+                    # 选择的是循环组内的动作 - 使用 _get_action_by_row_id 正确找到目标循环组
+                    # 获取选中项的 row_id
+                    tree_selection = self.action_tree.selection()
+                    if tree_selection:
+                        row_id = tree_selection[0]
+                        # 获取选中动作的直接父级循环组
+                        parent_action = self._get_parent_loop_action(row_id)
+                        if parent_action and parent_action.get('type') in ['loop_group', 'input_loop']:
+                            loop_actions = parent_action.setdefault('loop_actions', [])
+                            # 在末尾插入新动作
+                            loop_actions.append(action)
+                            # 获取父级循环组的 row_id 用于 select_index
+                            parent_row_id = '_'.join(row_id.split('_')[:-2]) if 'action_' in row_id else row_id
+                            self._update_action_list(select_index=parent_row_id)
+                        else:
+                            # 回退：使用原来的逻辑
+                            for s in selection:
+                                if isinstance(s, tuple) and s[0] == 'loop':
+                                    parent_loop_idx = s[1]
+                                    child_idx = s[2]
+                                    break
+                            parent_action = self.actions[parent_loop_idx]
+                            loop_actions = parent_action.setdefault('loop_actions', [])
+                            insert_child_pos = child_idx
+                            loop_actions.insert(insert_child_pos, action)
+                            self._update_action_list(select_index=f'loop_{parent_loop_idx}')
+                    else:
+                        self.in_dialog_operation = False
+                        dialog.destroy()
+                        return
                 else:
                     # 普通选择 - 先获取索引信息
                     int_indices = [s for s in selection if isinstance(s, int)]
@@ -3234,22 +3375,60 @@ class AutoTestGUI:
                 if not input_text:
                     raise ValueError("输入内容不能为空")
 
-                # 计算time（基于最后一个动作的时间）
-                time = 0
-                if self.actions:
-                    time = self.actions[-1].get('time', 0) + delay
+                # 获取当前选中项
+                selection = self._get_selected_indices()
+                has_loop_inner = any(isinstance(s, tuple) and s[0] == 'loop' for s in selection)
 
                 action = {
                     'type': 'input',
                     'text': input_text,
                     'x': x,
                     'y': y,
-                    'time': time
+                    'time': 0,
+                    'delay': delay
                 }
 
-                self.actions.append(action)
+                if has_loop_inner:
+                    # 选择的是循环组内的动作 - 使用 _get_parent_loop_action 正确找到目标循环组
+                    tree_selection = self.action_tree.selection()
+                    if tree_selection:
+                        row_id = tree_selection[0]
+                        parent_action = self._get_parent_loop_action(row_id)
+                        if parent_action and parent_action.get('type') in ['loop_group', 'input_loop']:
+                            loop_actions = parent_action.setdefault('loop_actions', [])
+                            loop_actions.append(action)
+                            parent_row_id = '_'.join(row_id.split('_')[:-2]) if 'action_' in row_id else row_id
+                            self._update_action_list(select_index=parent_row_id)
+                        else:
+                            # 回退：使用原来的逻辑
+                            for s in selection:
+                                if isinstance(s, tuple) and s[0] == 'loop':
+                                    parent_loop_idx = s[1]
+                                    child_idx = s[2]
+                                    break
+                            parent_action = self.actions[parent_loop_idx]
+                            loop_actions = parent_action.setdefault('loop_actions', [])
+                            loop_actions.insert(child_idx, action)
+                            self._update_action_list(select_index=f'loop_{parent_loop_idx}')
+                    else:
+                        self.in_dialog_operation = False
+                        dialog.destroy()
+                        return
+                else:
+                    # 计算time（基于最后一个动作的时间）
+                    time = 0
+                    if self.actions:
+                        time = self.actions[-1].get('time', 0) + delay
+                    action['time'] = time
+                    int_indices = [s for s in selection if isinstance(s, int)]
+                    if int_indices:
+                        insert_pos = int_indices[0]
+                    else:
+                        insert_pos = len(self.actions)
+                    self.actions.insert(insert_pos, action)
+                    self._update_action_list(select_index=insert_pos)
+
                 self._invalidate_relative_delay_cache()
-                self._update_action_list(scroll_to_end=True)
                 self.in_dialog_operation = False
                 dialog.destroy()
             except ValueError as e:
@@ -3493,22 +3672,31 @@ class AutoTestGUI:
                 has_loop_inner = any(isinstance(s, tuple) and s[0] == 'loop' for s in selection)
 
                 if has_loop_inner:
-                    # 选择的是循环组内的动作，在循环组内插入
-                    for s in selection:
-                        if isinstance(s, tuple) and s[0] == 'loop':
-                            parent_loop_idx = s[1]
-                            child_idx = s[2]
-                            break
-
-                    parent_action = self.actions[parent_loop_idx]
-                    loop_actions = parent_action.setdefault('loop_actions', [])
-
-                    # 在循环组内选中动作之前插入
-                    insert_child_pos = child_idx
-                    loop_actions.insert(insert_child_pos, action)
-
-                    # 更新循环组内的延时
-                    self._update_action_list(select_index=parent_loop_idx)
+                    # 选择的是循环组内的动作 - 使用 _get_parent_loop_action 正确找到目标循环组
+                    tree_selection = self.action_tree.selection()
+                    if tree_selection:
+                        row_id = tree_selection[0]
+                        parent_action = self._get_parent_loop_action(row_id)
+                        if parent_action and parent_action.get('type') in ['loop_group', 'input_loop']:
+                            loop_actions = parent_action.setdefault('loop_actions', [])
+                            loop_actions.append(action)
+                            parent_row_id = '_'.join(row_id.split('_')[:-2]) if 'action_' in row_id else row_id
+                            self._update_action_list(select_index=parent_row_id)
+                        else:
+                            # 回退：使用原来的逻辑
+                            for s in selection:
+                                if isinstance(s, tuple) and s[0] == 'loop':
+                                    parent_loop_idx = s[1]
+                                    child_idx = s[2]
+                                    break
+                            parent_action = self.actions[parent_loop_idx]
+                            loop_actions = parent_action.setdefault('loop_actions', [])
+                            loop_actions.insert(child_idx, action)
+                            self._update_action_list(select_index=f'loop_{parent_loop_idx}')
+                    else:
+                        self.in_dialog_operation = False
+                        dialog.destroy()
+                        return
                 else:
                     # 普通选择 - 在顶层动作列表中插入
                     int_indices = [s for s in selection if isinstance(s, int)]
@@ -3717,22 +3905,31 @@ class AutoTestGUI:
                 has_loop_inner = any(isinstance(s, tuple) and s[0] == 'loop' for s in selection)
 
                 if has_loop_inner:
-                    # 选择的是循环组内的动作，在循环组内插入延时
-                    for s in selection:
-                        if isinstance(s, tuple) and s[0] == 'loop':
-                            parent_loop_idx = s[1]
-                            child_idx = s[2]  # 选中的子动作索引
-                            break
-
-                    parent_action = self.actions[parent_loop_idx]
-                    loop_actions = parent_action.setdefault('loop_actions', [])
-
-                    # 在循环组内选中动作之前插入
-                    insert_child_pos = child_idx
-                    loop_actions.insert(insert_child_pos, action)
-
-                    # 更新循环组内的延时
-                    self._update_action_list(select_index=parent_loop_idx)
+                    # 选择的是循环组内的动作 - 使用 _get_parent_loop_action 正确找到目标循环组
+                    tree_selection = self.action_tree.selection()
+                    if tree_selection:
+                        row_id = tree_selection[0]
+                        parent_action = self._get_parent_loop_action(row_id)
+                        if parent_action and parent_action.get('type') in ['loop_group', 'input_loop']:
+                            loop_actions = parent_action.setdefault('loop_actions', [])
+                            loop_actions.append(action)
+                            parent_row_id = '_'.join(row_id.split('_')[:-2]) if 'action_' in row_id else row_id
+                            self._update_action_list(select_index=parent_row_id)
+                        else:
+                            # 回退：使用原来的逻辑
+                            for s in selection:
+                                if isinstance(s, tuple) and s[0] == 'loop':
+                                    parent_loop_idx = s[1]
+                                    child_idx = s[2]
+                                    break
+                            parent_action = self.actions[parent_loop_idx]
+                            loop_actions = parent_action.setdefault('loop_actions', [])
+                            loop_actions.insert(child_idx, action)
+                            self._update_action_list(select_index=f'loop_{parent_loop_idx}')
+                    else:
+                        self.in_dialog_operation = False
+                        dialog.destroy()
+                        return
                 else:
                     # 普通选择 - 在顶层动作列表中插入
                     int_indices = [s for s in selection if isinstance(s, int)]
@@ -3862,7 +4059,7 @@ class AutoTestGUI:
                     del loop_actions[start_idx:end_idx+1]
                     loop_actions.insert(start_idx, nested_loop)
                     parent_action['loop_actions'] = loop_actions
-                    self._update_action_list(select_index=parent_loop_idx)
+                    self._update_action_list(select_index=f'loop_{parent_loop_idx}')
                 else:
                     action = {
                         'type': 'loop_group',
@@ -3873,7 +4070,7 @@ class AutoTestGUI:
 
                     del self.actions[start_idx:end_idx+1]
                     self.actions.insert(start_idx, action)
-                    self._update_action_list(select_index=start_idx)
+                    self._update_action_list(select_index=str(start_idx))
 
                 self.in_dialog_operation = False
                 dialog.destroy()
@@ -5060,7 +5257,7 @@ class AutoTestGUI:
                     self._edit_nested_variable_input_action(action, row_id)
                     return
                 elif action_type == 'traverse_input':
-                    self._edit_nested_traverse_input_action(action)
+                    self._edit_nested_traverse_input_action(action, row_id)
                     return
                 else:
                     self.edit_action_time(event)
@@ -6330,7 +6527,7 @@ class AutoTestGUI:
                 action['time'] = prev_time + delay_var.get()
 
                 # 刷新列表
-                self._update_action_list()
+                self._update_action_list(select_index=row_id)
                 self.in_dialog_operation = False
                 dialog.destroy()
             except Exception as e:
@@ -6500,7 +6697,7 @@ class AutoTestGUI:
                     prev_time = 0
                 action['time'] = prev_time + delay_var.get()
 
-                self._update_action_list()
+                self._update_action_list(select_index=row_id)
                 self.in_dialog_operation = False
                 dialog.destroy()
             except Exception as e:
@@ -6508,7 +6705,7 @@ class AutoTestGUI:
 
         ttk.Button(frame, text="确定", command=confirm).grid(row=7, column=0, columnspan=2, pady=15)
 
-    def _edit_nested_traverse_input_action(self, action):
+    def _edit_nested_traverse_input_action(self, action, row_id):
         """编辑嵌套的输入动作"""
         self.in_dialog_operation = True
 
@@ -6704,7 +6901,7 @@ class AutoTestGUI:
                 action['random_max'] = random_max if traverse_type == "random" else None
                 action['delay'] = delay_var.get()
 
-                self._update_action_list()
+                self._update_action_list(select_index=row_id)
                 self.in_dialog_operation = False
                 dialog.destroy()
             except ValueError as e:
@@ -6757,7 +6954,7 @@ class AutoTestGUI:
                 if loop_count < 1:
                     raise ValueError("循环次数至少为1")
                 action['loop_count'] = loop_count
-                self._update_action_list()
+                self._update_action_list(select_index=row_id)
                 self.in_dialog_operation = False
                 dialog.destroy()
             except Exception as e:
@@ -6856,7 +7053,7 @@ class AutoTestGUI:
                         raise ValueError("无效的延时范围")
                     action['min_delay'] = min_delay
                     action['max_delay'] = max_delay
-                    self._update_action_list()
+                    self._update_action_list(select_index=row_id)
                     self.in_dialog_operation = False
                     dialog.destroy()
                 except Exception as e:
@@ -6872,7 +7069,7 @@ class AutoTestGUI:
                     if base_delay < 0:
                         raise ValueError("基数不能为负数")
                     action['base_delay'] = base_delay
-                    self._update_action_list()
+                    self._update_action_list(select_index=row_id)
                     self.in_dialog_operation = False
                     dialog.destroy()
                 except Exception as e:
@@ -6894,7 +7091,7 @@ class AutoTestGUI:
                         raise ValueError("延时和步距不能为负数")
                     action['start_delay'] = start_delay
                     action['step_delay'] = step_delay
-                    self._update_action_list()
+                    self._update_action_list(select_index=row_id)
                     self.in_dialog_operation = False
                     dialog.destroy()
                 except Exception as e:
@@ -6911,7 +7108,7 @@ class AutoTestGUI:
                     if not new_values:
                         raise ValueError("列表不能为空")
                     action['delay_values'] = new_values
-                    self._update_action_list()
+                    self._update_action_list(select_index=row_id)
                     self.in_dialog_operation = False
                     dialog.destroy()
                 except Exception as e:
@@ -6927,7 +7124,7 @@ class AutoTestGUI:
                     if new_time < 0:
                         raise ValueError("时间不能为负数")
                     action['time'] = new_time
-                    self._update_action_list()
+                    self._update_action_list(select_index=row_id)
                     self.in_dialog_operation = False
                     dialog.destroy()
                 except Exception as e:
