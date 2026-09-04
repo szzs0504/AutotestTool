@@ -39,7 +39,7 @@ def take_screenshot(use_timestamp=True):
     except Exception as e:
         print(f"Screenshot failed: {e}")
 
-def is_admin():
+def is_admin():    
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
     except OSError:
@@ -135,6 +135,12 @@ class AutoTestGUI:
         )
 
         self.setup_ui()
+
+    def _button_to_str(self, button):
+        """将 pynput 的 button 枚举转换为 pyautogui 的字符串"""
+        if hasattr(button, 'name'):
+            return button.name  # e.g., 'left', 'right', 'middle'
+        return str(button)
 
     def _record_position_with_dialog(self, dialog, x_var, y_var, status_label):
         """录制位置 - 共享方法，支持不同对话框
@@ -503,7 +509,7 @@ class AutoTestGUI:
                     'type': 'doubleclick',
                     'x': x,
                     'y': y,
-                    'button': str(button),
+                    'button': self._button_to_str(button),
                     'delay': action_delay
                 })
                 self.update_action_list_display()
@@ -513,7 +519,7 @@ class AutoTestGUI:
                     'type': 'click',
                     'x': x,
                     'y': y,
-                    'button': str(button),
+                    'button': self._button_to_str(button),
                     'delay': action_delay
                 })
                 self.update_action_list_display()
@@ -761,7 +767,6 @@ class AutoTestGUI:
                 # 单个按键直接使用press
                 pyautogui.press(mapped_keys[0])
             
-            time.sleep(0.1)  # 确保按键执行完成
         except Exception as e:
             print(f"键盘事件执行错误: {e}")
 
@@ -969,15 +974,25 @@ class AutoTestGUI:
         self.status_var.set(f"使用{'随机' if is_random else '固定'}时间间隔")
 
     def _update_loop_count_max(self):
-        """更新主界面循环次数的最大值，如果动作列表中有列表遍历类型的输入"""
+        """更新主界面循环次数的最大值，如果动作列表中有列表遍历或序列遍历类型的输入"""
         max_count = 9999
         for action in self.actions:
             # 只检查顶层动作，不检查循环组内的嵌套动作
-            if action.get('type') == 'traverse_input' and action.get('traverse_type') == 'list':
-                values = action.get('traverse_values', [])
-                if values:
-                    max_count = len(values)
-                    break
+            if action.get('type') == 'traverse_input':
+                tt = action.get('traverse_type', 'list')
+                if tt == 'list':
+                    values = action.get('traverse_values', [])
+                    if values:
+                        max_count = len(values)
+                        break
+                elif tt == 'sequence':
+                    start = action.get('start', 0)
+                    step = action.get('step', 1)
+                    end = action.get('end', None)
+                    if end is not None and end != '':
+                        seq_count = int((float(end) - start) / step) + 1
+                        max_count = seq_count
+                        break
         self.loop_spinbox.configure(to=max_count)
         if self.loop_count.get() > max_count:
             self.loop_count.set(max_count)
@@ -1046,7 +1061,8 @@ class AutoTestGUI:
         action_type = action.get('type')
         if action_type == 'click':
             pyautogui.moveTo(action['x'], action['y'], duration=0.1)
-            pyautogui.click(x=action['x'], y=action['y'])
+            button = action.get('button', 'left')
+            pyautogui.click(x=action['x'], y=action['y'], button=button)
         elif action_type == 'doubleclick':
             pyautogui.moveTo(action['x'], action['y'], duration=0.1)
             pyautogui.doubleClick(x=action['x'], y=action['y'])
@@ -1134,11 +1150,10 @@ class AutoTestGUI:
             if clear_text:
                 # 全选并删除
                 pyautogui.hotkey('ctrl', 'a')
-                time.sleep(0.05)
                 pyautogui.press('backspace')
 
             # 输入文本
-            pyautogui.write(str(value), interval=0.05)
+            pyautogui.write(str(value), interval=0.02)
         elif action_type == 'input':
             # 输入动作：点击坐标并输入文本
             target_x = action.get('x')
@@ -1148,15 +1163,13 @@ class AutoTestGUI:
             if target_x is not None and target_y is not None:
                 pyautogui.moveTo(target_x, target_y, duration=0.1)
                 pyautogui.click(x=target_x, y=target_y)
-                time.sleep(0.1)
 
             # 清空输入框
             pyautogui.hotkey('ctrl', 'a')
-            time.sleep(0.05)
             pyautogui.press('delete')
 
             if input_text:
-                pyautogui.write(input_text, interval=0.05)
+                pyautogui.write(input_text, interval=0.02)
 
         elif action_type == 'traverse_input':
             # 输入：根据循环索引使用不同的值
@@ -1168,7 +1181,14 @@ class AutoTestGUI:
             if traverse_type == 'sequence':
                 start = action.get('start', 0)
                 step = action.get('step', 1)
-                value = start + step * loop_index
+                end = action.get('end', None)
+                if end is not None and end != '':
+                    end = float(end)
+                    seq_count = int((end - start) / step) + 1
+                    actual_index = loop_index % seq_count
+                else:
+                    actual_index = loop_index
+                value = start + step * actual_index
                 template = action.get('template', 'text{n}')
                 text_to_input = template.replace('{n}', str(value))
             elif traverse_type == 'fixed_text':
@@ -1194,16 +1214,14 @@ class AutoTestGUI:
             if target_x is not None and target_y is not None:
                 pyautogui.moveTo(target_x, target_y, duration=0.1)
                 pyautogui.click()
-                time.sleep(0.05)
                 pyautogui.hotkey('ctrl', 'a')
-                time.sleep(0.05)
                 pyautogui.press('backspace')
 
             if text_to_input:
                 if traverse_type == 'sequence' or traverse_type == 'random':
-                    pyautogui.write(text_to_input, interval=0.05)
+                    pyautogui.write(text_to_input, interval=0.02)
                 else:
-                    pyautogui.write(str(text_to_input), interval=0.05)
+                    pyautogui.write(str(text_to_input), interval=0.02)
                 # 回放信息显示
                 type_names = {'list': '列表', 'fixed_text': '固定文本', 'sequence': '序列', 'random': '随机'}
                 type_name = type_names.get(traverse_type, traverse_type)
@@ -1240,21 +1258,18 @@ class AutoTestGUI:
                 if target_x is not None and target_y is not None:
                     pyautogui.moveTo(target_x, target_y, duration=0.1)
                     pyautogui.click(x=target_x, y=target_y)
-                    time.sleep(0.1)
 
                 # 清空文本框
                 if clear_text:
                     pyautogui.hotkey('ctrl', 'a')
-                    time.sleep(0.05)
                     pyautogui.press('backspace')
-                    time.sleep(0.05)
 
                 # 生成并输入文本
                 if loop_type == 'list':
                     text = str(value)
                 else:
                     text = template.replace('{n}', str(value))
-                pyautogui.write(text, interval=0.05)
+                pyautogui.write(text, interval=0.02)
 
                 # 执行循环内动作
                 for act in loop_actions:
@@ -1356,9 +1371,11 @@ class AutoTestGUI:
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
                         remark_info = f" {remark}" if remark else ""
+                        action_desc = f"移动到 ({action['x']}, {action['y']}){remark_info}"
                         if delay > 0:
-                            self.update_playback_info(f"等待 {delay} 秒")
-                        self.update_playback_info(f"移动到 ({action['x']}, {action['y']}){remark_info}")
+                            self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
+                        else:
+                            self.update_playback_info(action_desc)
                         next_is_click = (i < len(self.actions) - 1 and
                                        self.actions[i + 1]['type'] in ['click', 'doubleclick'])
                         if next_is_click:
@@ -1367,52 +1384,60 @@ class AutoTestGUI:
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
                         remark_info = f" {remark}" if remark else ""
+                        action_desc = f"单击 ({action['x']}, {action['y']}){remark_info}"
                         if delay > 0:
-                            self.update_playback_info(f"等待 {delay} 秒")
-                        self.update_playback_info(f"单击 ({action['x']}, {action['y']}){remark_info}")
-                        pyautogui.moveTo(action['x'], action['y'], duration=0.2)
-                        pyautogui.click(x=action['x'], y=action['y'])
+                            self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
+                        else:
+                            self.update_playback_info(action_desc)
+                        button = action.get('button', 'left')
+                        pyautogui.click(x=action['x'], y=action['y'], button=button)
                     elif action['type'] == 'doubleclick':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
                         remark_info = f" {remark}" if remark else ""
+                        action_desc = f"双击 ({action['x']}, {action['y']}){remark_info}"
                         if delay > 0:
-                            self.update_playback_info(f"等待 {delay} 秒")
-                        self.update_playback_info(f"双击 ({action['x']}, {action['y']}){remark_info}")
+                            self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
+                        else:
+                            self.update_playback_info(action_desc)
                         pyautogui.moveTo(action['x'], action['y'], duration=0.2)
                         pyautogui.doubleClick(x=action['x'], y=action['y'])
                     elif action['type'] == 'input':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
                         remark_info = f" {remark}" if remark else ""
+                        action_desc = f"输入: {action.get('text', '')[:30]}...{remark_info}"
                         if delay > 0:
-                            self.update_playback_info(f"等待 {delay} 秒")
-                        self.update_playback_info(f"输入: {action.get('text', '')[:30]}...{remark_info}")
+                            self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
+                        else:
+                            self.update_playback_info(action_desc)
                         pyautogui.moveTo(action['x'], action['y'], duration=0.2)
                         pyautogui.click(x=action['x'], y=action['y'])
-                        time.sleep(0.1)
                         # 清空输入框
                         pyautogui.hotkey('ctrl', 'a')
-                        time.sleep(0.05)
                         pyautogui.press('delete')
                         # 输入文本
-                        pyautogui.write(action.get('text', ''), interval=0.05)
+                        pyautogui.write(action.get('text', ''), interval=0.02)
                     elif action['type'] == 'keyboard':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
                         remark_info = f" {remark}" if remark else ""
+                        action_desc = f"按键: {action['keys']}{remark_info}"
                         if delay > 0:
-                            self.update_playback_info(f"等待 {delay} 秒")
-                        self.update_playback_info(f"按键: {action['keys']}{remark_info}")
+                            self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
+                        else:
+                            self.update_playback_info(action_desc)
                         keys = [k.lower() for k in action['keys']]
                         self.execute_keyboard_action(keys)
                     elif action['type'] == 'scroll':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
                         remark_info = f" {remark}" if remark else ""
+                        action_desc = f"滚动 {action.get('dy', 0)}{remark_info}"
                         if delay > 0:
-                            self.update_playback_info(f"等待 {delay} 秒")
-                        self.update_playback_info(f"滚动 {action.get('dy', 0)}{remark_info}")
+                            self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
+                        else:
+                            self.update_playback_info(action_desc)
                         pyautogui.moveTo(action['x'], action['y'], duration=0.2)
                         scroll_amount = int(action['dy'] * 100)
                         if scroll_amount != 0:
@@ -1473,11 +1498,6 @@ class AutoTestGUI:
                                 action_remark = loop_action.get('remark', '')
                                 remark_info = f" {action_remark}" if action_remark else ""
 
-                                # 先处理延时等待
-                                if action_delay > 0:
-                                    self.update_playback_info(f"  等待 {action_delay} 秒")
-                                    time.sleep(action_delay)
-
                                 # 根据动作类型生成描述并执行
                                 if action_type == 'click':
                                     desc = f"  → 单击 ({loop_action.get('x')}, {loop_action.get('y')}){remark_info}"
@@ -1495,7 +1515,11 @@ class AutoTestGUI:
                                     desc = f"  → {self._describe_action(loop_action)}"
                                 else:
                                     desc = f"  → {action_type}"
-                                self.update_playback_info(desc)
+
+                                if action_delay > 0:
+                                    self.update_playback_info(f"  等待 {action_delay}秒 → {desc}")
+                                else:
+                                    self.update_playback_info(desc)
                                 self._execute_single_action(loop_action, loop_idx)
 
                             # 循环间隔
@@ -1548,7 +1572,7 @@ class AutoTestGUI:
 
                             # 替换文本中的占位符并输入
                             text_to_input = input_text.replace('{n}', str(value)).replace('{i}', str(value))
-                            pyautogui.write(text_to_input, interval=0.05)
+                            pyautogui.write(text_to_input, interval=0.02)
                             self.update_playback_info(f"数值循环: 输入 {text_to_input}")
 
                             # 等待间隔
@@ -1583,13 +1607,11 @@ class AutoTestGUI:
                             if clear_text:
                                 # 全选并删除
                                 pyautogui.hotkey('ctrl', 'a')
-                                time.sleep(0.05)
                                 pyautogui.press('backspace')
-                                time.sleep(0.05)
 
                         # 替换文本中的占位符并输入
                         text_to_input = input_text.replace('{' + str(start) + '}', str(current_value)).replace('{n}', str(current_value)).replace('{i}', str(current_value))
-                        pyautogui.write(text_to_input, interval=0.05)
+                        pyautogui.write(text_to_input, interval=0.02)
                         self.update_playback_info(f"变量输入: {text_to_input}")
 
                         # 更新变量值
@@ -1604,7 +1626,14 @@ class AutoTestGUI:
                         if traverse_type == 'sequence':
                             start = action.get('start', 0)
                             step = action.get('step', 1)
-                            value = start + step * loop
+                            end = action.get('end', None)
+                            if end is not None and end != '':
+                                end = float(end)
+                                seq_count = int((end - start) / step) + 1
+                                actual_index = loop % seq_count
+                            else:
+                                actual_index = loop
+                            value = start + step * actual_index
                             template = action.get('template', 'text{n}')
                             text_to_input = template.replace('{n}', str(value))
                         elif traverse_type == 'fixed_text':
@@ -1630,17 +1659,15 @@ class AutoTestGUI:
                             if target_x is not None and target_y is not None:
                                 pyautogui.moveTo(target_x, target_y, duration=0.1)
                                 pyautogui.click()
-                                time.sleep(0.05)
                                 pyautogui.hotkey('ctrl', 'a')
-                                time.sleep(0.05)
                                 pyautogui.press('backspace')
                             if traverse_type == 'sequence' or traverse_type == 'random':
-                                pyautogui.write(text_to_input, interval=0.05)
+                                pyautogui.write(text_to_input, interval=0.02)
                                 type_names = {'list': '列表', 'fixed_text': '固定文本', 'sequence': '序列', 'random': '随机'}
                                 type_name = type_names.get(traverse_type, traverse_type)
                                 self.update_playback_info(f"输入[{type_name}]：{text_to_input}")
                             else:
-                                pyautogui.write(str(value), interval=0.05)
+                                pyautogui.write(str(value), interval=0.02)
                                 type_names = {'list': '列表', 'fixed_text': '固定文本', 'sequence': '序列', 'random': '随机'}
                                 type_name = type_names.get(traverse_type, traverse_type)
                                 self.update_playback_info(f"输入[{type_name}]：{value}")
@@ -1773,6 +1800,12 @@ class AutoTestGUI:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 self.actions = json.load(f)
+            # 兼容旧格式的 button 值（如 "Button.left" → "left"）
+            for action in self.actions:
+                if action.get('type') in ('click', 'doubleclick'):
+                    btn = action.get('button', '')
+                    if isinstance(btn, str) and btn.startswith('Button.'):
+                        action['button'] = btn[len('Button.'):]
             # 为每个动作设置 delay（兼容旧格式）
             for i, action in enumerate(self.actions):
                 if 'delay' not in action:
@@ -2010,8 +2043,16 @@ class AutoTestGUI:
             else:
                 start = action.get('start', 0)
                 step = action.get('step', 1)
+                end = action.get('end', None)
+                end_str = f"-{end}" if end else "∞"
                 template = action.get('template', 'text{n}')
-                return f"输入[序列]：{template} (起始{start},步距{step})"
+                if end is not None and end != '':
+                    try:
+                        seq_count = int((float(end) - start) / step) + 1
+                        return f"输入[序列]：{template} ({start}→{end_str},步距{step},共{seq_count}个)"
+                    except (ValueError, ZeroDivisionError):
+                        return f"输入[序列]：{template} ({start}→{end_str},步距{step})"
+                return f"输入[序列]：{template} ({start}→{end_str},步距{step})"
         if action_type == 'move':
             return f"移动到 ({action['x']}, {action['y']})"
         if action_type == 'doubleclick':
@@ -3399,6 +3440,7 @@ class AutoTestGUI:
                             loop_actions.append(action)
                             parent_row_id = '_'.join(row_id.split('_')[:-2]) if 'action_' in row_id else row_id
                             self._update_action_list(select_index=parent_row_id)
+                            self._sync_parent_loop_count(parent_row_id)
                         else:
                             # 回退：使用原来的逻辑
                             for s in selection:
@@ -3409,7 +3451,9 @@ class AutoTestGUI:
                             parent_action = self.actions[parent_loop_idx]
                             loop_actions = parent_action.setdefault('loop_actions', [])
                             loop_actions.insert(child_idx, action)
-                            self._update_action_list(select_index=f'loop_{parent_loop_idx}')
+                            parent_row_id = f'loop_{parent_loop_idx}'
+                            self._update_action_list(select_index=parent_row_id)
+                            self._sync_parent_loop_count(parent_row_id)
                     else:
                         self.in_dialog_operation = False
                         dialog.destroy()
@@ -3530,17 +3574,23 @@ class AutoTestGUI:
         seq_row1 = ttk.Frame(seq_frame)
         seq_row1.pack(side=tk.TOP, fill=tk.X)
         ttk.Label(seq_row1, text="起始值:").pack(side=tk.LEFT, padx=2)
-        start_var = tk.DoubleVar(value=0)
+        start_var = tk.StringVar(value="0")
         ttk.Entry(seq_row1, width=8, textvariable=start_var).pack(side=tk.LEFT, padx=2)
         ttk.Label(seq_row1, text="步距:").pack(side=tk.LEFT, padx=2)
-        step_var = tk.DoubleVar(value=1)
+        step_var = tk.StringVar(value="1")
         ttk.Entry(seq_row1, width=8, textvariable=step_var).pack(side=tk.LEFT, padx=2)
         seq_row2 = ttk.Frame(seq_frame)
         seq_row2.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
-        ttk.Label(seq_row2, text="模板:").pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row2, text="结束值:").pack(side=tk.LEFT, padx=2)
+        end_var = tk.StringVar(value="")  # 空=无穷大
+        ttk.Entry(seq_row2, width=8, textvariable=end_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row2, text="(空=无穷大)").pack(side=tk.LEFT, padx=2)
+        seq_row3 = ttk.Frame(seq_frame)
+        seq_row3.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
+        ttk.Label(seq_row3, text="模板:").pack(side=tk.LEFT, padx=2)
         seq_template_var = tk.StringVar(value="text{n}text")
-        ttk.Entry(seq_row2, width=15, textvariable=seq_template_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(seq_row2, text="(用{n}替换)").pack(side=tk.LEFT, padx=2)
+        ttk.Entry(seq_row3, width=15, textvariable=seq_template_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row3, text="(用{n}替换)").pack(side=tk.LEFT, padx=2)
 
         # 固定文本参数
         fixed_text_frame = ttk.Frame(params_frame)
@@ -3633,8 +3683,20 @@ class AutoTestGUI:
                         raise ValueError("遍历列表不能为空")
                     values = [line.strip() for line in text_content.split('\n') if line.strip()]
                 elif traverse_type == "sequence":
-                    start = start_var.get()
-                    step = step_var.get()
+                    try:
+                        start = float(start_var.get()) if start_var.get() else 0
+                    except ValueError:
+                        start = 0
+                    try:
+                        step = float(step_var.get()) if step_var.get() else 1
+                    except ValueError:
+                        step = 1
+                    # 小数点后为0时转为整数，避免输入时被吞掉
+                    if start == int(start):
+                        start = int(start)
+                    if step == int(step):
+                        step = int(step)
+                    end = end_var.get()
                     seq_template = seq_template_var.get()
                 elif traverse_type == "random":
                     random_min = random_min_var.get()
@@ -3657,6 +3719,7 @@ class AutoTestGUI:
                     'traverse_values': values if traverse_type == "list" else [],
                     'start': start if traverse_type == "sequence" else None,
                     'step': step if traverse_type == "sequence" else None,
+                    'end': end if traverse_type == "sequence" else None,
                     'template': seq_template if traverse_type == "sequence" else (random_template if traverse_type == "random" else None),
                     'fixed_text': fixed_text if traverse_type == "fixed_text" else None,
                     'random_min': random_min if traverse_type == "random" else None,
@@ -3692,7 +3755,9 @@ class AutoTestGUI:
                             parent_action = self.actions[parent_loop_idx]
                             loop_actions = parent_action.setdefault('loop_actions', [])
                             loop_actions.insert(child_idx, action)
-                            self._update_action_list(select_index=f'loop_{parent_loop_idx}')
+                            parent_row_id = f'loop_{parent_loop_idx}'
+                            self._update_action_list(select_index=parent_row_id)
+                            self._sync_parent_loop_count(parent_row_id)
                     else:
                         self.in_dialog_operation = False
                         dialog.destroy()
@@ -3925,7 +3990,9 @@ class AutoTestGUI:
                             parent_action = self.actions[parent_loop_idx]
                             loop_actions = parent_action.setdefault('loop_actions', [])
                             loop_actions.insert(child_idx, action)
-                            self._update_action_list(select_index=f'loop_{parent_loop_idx}')
+                            parent_row_id = f'loop_{parent_loop_idx}'
+                            self._update_action_list(select_index=parent_row_id)
+                            self._sync_parent_loop_count(parent_row_id)
                     else:
                         self.in_dialog_operation = False
                         dialog.destroy()
@@ -4010,11 +4077,21 @@ class AutoTestGUI:
         # 计算循环次数上限（如果包含列表遍历类型的输入，最大值设为列表长度）
         max_loop_count = 9999
         for act in loop_actions_selected:
-            if act.get('type') == 'traverse_input' and act.get('traverse_type') == 'list':
-                values = act.get('traverse_values', [])
-                if values:
-                    max_loop_count = len(values)
-                    break
+            if act.get('type') == 'traverse_input':
+                tt = act.get('traverse_type', 'list')
+                if tt == 'list':
+                    values = act.get('traverse_values', [])
+                    if values:
+                        max_loop_count = len(values)
+                        break
+                elif tt == 'sequence':
+                    start = act.get('start', 0)
+                    step = act.get('step', 1)
+                    end = act.get('end', None)
+                    if end is not None and end != '':
+                        seq_count = int((float(end) - start) / step) + 1
+                        max_loop_count = seq_count
+                        break
 
         # 循环次数
         loop_count_frame = ttk.Frame(main_frame)
@@ -4035,14 +4112,29 @@ class AutoTestGUI:
                 if loop_count <= 0:
                     raise ValueError("循环次数必须大于0")
 
-                # 检查循环组内的输入动作，自动调整循环次数为列表长度
+                # 检查循环组内的输入动作，自动调整循环次数
                 for act in loop_actions_selected:
-                    if act.get('type') == 'traverse_input' and act.get('traverse_type') == 'list':
-                        values = act.get('traverse_values', [])
-                        if values and len(values) < loop_count:
-                            loop_count = len(values)
-                            loop_count_var.set(loop_count)
-                            break
+                    if act.get('type') == 'traverse_input':
+                        tt = act.get('traverse_type', 'list')
+                        if tt == 'list':
+                            values = act.get('traverse_values', [])
+                            if values and len(values) < loop_count:
+                                loop_count = len(values)
+                                loop_count_var.set(loop_count)
+                                break
+                        elif tt == 'sequence':
+                            end = act.get('end', None)
+                            if end is not None and end != '':
+                                try:
+                                    start = act.get('start', 0)
+                                    step = act.get('step', 1)
+                                    seq_count = int((float(end) - start) / step) + 1
+                                    if seq_count < loop_count:
+                                        loop_count = seq_count
+                                        loop_count_var.set(loop_count)
+                                        break
+                                except (ValueError, ZeroDivisionError):
+                                    pass
 
                 if is_loop_inner:
                     parent_action = self.actions[parent_loop_idx]
@@ -4825,12 +4917,12 @@ class AutoTestGUI:
                         loop_actions.pop()
                     loop_actions.append({
                         'type': 'doubleclick', 'x': x, 'y': y,
-                        'button': str(button), 'delay': action_delay
+                        'button': self._button_to_str(button), 'delay': action_delay
                     })
                 else:
                     loop_actions.append({
                         'type': 'click', 'x': x, 'y': y,
-                        'button': str(button), 'delay': action_delay
+                        'button': self._button_to_str(button), 'delay': action_delay
                     })
                 self.last_click_time = current_time
                 self.last_click_position = (x, y)
@@ -5350,7 +5442,7 @@ class AutoTestGUI:
         status_label = ttk.Label(frame, text="", foreground="blue")
         status_label.grid(row=3, column=0, columnspan=2, pady=5)
 
-        record_btn.config(command=lambda: self._record_position_with_pyautogui(dialog, x_var, y_var, status_label))
+        record_btn.config(command=lambda: self._record_position_with_dialog(dialog, x_var, y_var, status_label))
 
         def confirm():
             try:
@@ -5435,7 +5527,7 @@ class AutoTestGUI:
         status_label = ttk.Label(frame, text="", foreground="blue")
         status_label.grid(row=3, column=0, columnspan=2, pady=5)
 
-        record_btn.config(command=lambda: self._record_position_with_pyautogui(dialog, x_var, y_var, status_label))
+        record_btn.config(command=lambda: self._record_position_with_dialog(dialog, x_var, y_var, status_label))
 
         def confirm():
             try:
@@ -5544,17 +5636,23 @@ class AutoTestGUI:
         seq_row1 = ttk.Frame(seq_frame)
         seq_row1.pack(side=tk.TOP, fill=tk.X)
         ttk.Label(seq_row1, text="起始值:").pack(side=tk.LEFT, padx=2)
-        start_var = tk.DoubleVar(value=action.get('start', 0))
+        start_var = tk.StringVar(value=str(action.get('start', 0)))
         ttk.Entry(seq_row1, width=8, textvariable=start_var).pack(side=tk.LEFT, padx=2)
         ttk.Label(seq_row1, text="步距:").pack(side=tk.LEFT, padx=2)
-        step_var = tk.DoubleVar(value=action.get('step', 1))
+        step_var = tk.StringVar(value=str(action.get('step', 1)))
         ttk.Entry(seq_row1, width=8, textvariable=step_var).pack(side=tk.LEFT, padx=2)
         seq_row2 = ttk.Frame(seq_frame)
         seq_row2.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
-        ttk.Label(seq_row2, text="模板:").pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row2, text="结束值:").pack(side=tk.LEFT, padx=2)
+        end_var = tk.StringVar(value=action.get('end', '') or '')
+        ttk.Entry(seq_row2, width=8, textvariable=end_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row2, text="(空=无穷大)").pack(side=tk.LEFT, padx=2)
+        seq_row3 = ttk.Frame(seq_frame)
+        seq_row3.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
+        ttk.Label(seq_row3, text="模板:").pack(side=tk.LEFT, padx=2)
         seq_template_var = tk.StringVar(value=action.get('template', 'text{n}'))
-        ttk.Entry(seq_row2, width=15, textvariable=seq_template_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(seq_row2, text="(用{n}替换)").pack(side=tk.LEFT, padx=2)
+        ttk.Entry(seq_row3, width=15, textvariable=seq_template_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row3, text="(用{n}替换)").pack(side=tk.LEFT, padx=2)
 
         # 固定文本参数
         fixed_text_frame = ttk.Frame(params_frame)
@@ -5646,8 +5744,20 @@ class AutoTestGUI:
                         raise ValueError("遍历列表不能为空")
                     values = [line.strip() for line in text_content.split('\n') if line.strip()]
                 elif traverse_type == "sequence":
-                    start = start_var.get()
-                    step = step_var.get()
+                    try:
+                        start = float(start_var.get()) if start_var.get() else 0
+                    except ValueError:
+                        start = 0
+                    try:
+                        step = float(step_var.get()) if step_var.get() else 1
+                    except ValueError:
+                        step = 1
+                    # 小数点后为0时转为整数，避免输入时被吞掉
+                    if start == int(start):
+                        start = int(start)
+                    if step == int(step):
+                        step = int(step)
+                    end = end_var.get()
                     seq_template = seq_template_var.get()
                 elif traverse_type == "random":
                     random_min = random_min_var.get()
@@ -5665,6 +5775,7 @@ class AutoTestGUI:
                 action['traverse_values'] = values if traverse_type == "list" else []
                 action['start'] = start if traverse_type == "sequence" else None
                 action['step'] = step if traverse_type == "sequence" else None
+                action['end'] = end if traverse_type == "sequence" else None
                 action['template'] = seq_template if traverse_type == "sequence" else (random_template if traverse_type == "random" else None)
                 action['fixed_text'] = fixed_text if traverse_type == "fixed_text" else None
                 action['random_min'] = random_min if traverse_type == "random" else None
@@ -6775,17 +6886,23 @@ class AutoTestGUI:
         seq_row1 = ttk.Frame(seq_frame)
         seq_row1.pack(side=tk.TOP, fill=tk.X)
         ttk.Label(seq_row1, text="起始值:").pack(side=tk.LEFT, padx=2)
-        start_var = tk.DoubleVar(value=action.get('start', 0))
+        start_var = tk.StringVar(value=str(action.get('start', 0)))
         ttk.Entry(seq_row1, width=8, textvariable=start_var).pack(side=tk.LEFT, padx=2)
         ttk.Label(seq_row1, text="步距:").pack(side=tk.LEFT, padx=2)
-        step_var = tk.DoubleVar(value=action.get('step', 1))
+        step_var = tk.StringVar(value=str(action.get('step', 1)))
         ttk.Entry(seq_row1, width=8, textvariable=step_var).pack(side=tk.LEFT, padx=2)
         seq_row2 = ttk.Frame(seq_frame)
         seq_row2.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
-        ttk.Label(seq_row2, text="模板:").pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row2, text="结束值:").pack(side=tk.LEFT, padx=2)
+        end_var = tk.StringVar(value=action.get('end', '') or '')
+        ttk.Entry(seq_row2, width=8, textvariable=end_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row2, text="(空=无穷大)").pack(side=tk.LEFT, padx=2)
+        seq_row3 = ttk.Frame(seq_frame)
+        seq_row3.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
+        ttk.Label(seq_row3, text="模板:").pack(side=tk.LEFT, padx=2)
         seq_template_var = tk.StringVar(value=action.get('template', 'text{n}'))
-        ttk.Entry(seq_row2, width=15, textvariable=seq_template_var).pack(side=tk.LEFT, padx=2)
-        ttk.Label(seq_row2, text="(用{n}替换)").pack(side=tk.LEFT, padx=2)
+        ttk.Entry(seq_row3, width=15, textvariable=seq_template_var).pack(side=tk.LEFT, padx=2)
+        ttk.Label(seq_row3, text="(用{n}替换)").pack(side=tk.LEFT, padx=2)
 
         # 固定文本参数
         fixed_text_frame = ttk.Frame(params_frame)
@@ -6876,8 +6993,20 @@ class AutoTestGUI:
                         raise ValueError("遍历列表不能为空")
                     values = [line.strip() for line in text_content.split('\n') if line.strip()]
                 elif traverse_type == "sequence":
-                    start = start_var.get()
-                    step = step_var.get()
+                    try:
+                        start = float(start_var.get()) if start_var.get() else 0
+                    except ValueError:
+                        start = 0
+                    try:
+                        step = float(step_var.get()) if step_var.get() else 1
+                    except ValueError:
+                        step = 1
+                    # 小数点后为0时转为整数，避免输入时被吞掉
+                    if start == int(start):
+                        start = int(start)
+                    if step == int(step):
+                        step = int(step)
+                    end = end_var.get()
                     seq_template = seq_template_var.get()
                 elif traverse_type == "random":
                     random_min = random_min_var.get()
@@ -6895,6 +7024,7 @@ class AutoTestGUI:
                 action['traverse_values'] = values if traverse_type == "list" else []
                 action['start'] = start if traverse_type == "sequence" else None
                 action['step'] = step if traverse_type == "sequence" else None
+                action['end'] = end if traverse_type == "sequence" else None
                 action['template'] = seq_template if traverse_type == "sequence" else (random_template if traverse_type == "random" else None)
                 action['fixed_text'] = fixed_text if traverse_type == "fixed_text" else None
                 action['random_min'] = random_min if traverse_type == "random" else None
@@ -6902,6 +7032,7 @@ class AutoTestGUI:
                 action['delay'] = delay_var.get()
 
                 self._update_action_list(select_index=row_id)
+                self._sync_parent_loop_count(row_id)
                 self.in_dialog_operation = False
                 dialog.destroy()
             except ValueError as e:
@@ -6934,11 +7065,21 @@ class AutoTestGUI:
         loop_actions = action.get('loop_actions', [])
         max_loop_count = 9999
         for act in loop_actions:
-            if act.get('type') == 'traverse_input' and act.get('traverse_type') == 'list':
-                values = act.get('traverse_values', [])
-                if values:
-                    max_loop_count = len(values)
-                    break
+            if act.get('type') == 'traverse_input':
+                tt = act.get('traverse_type', 'list')
+                if tt == 'list':
+                    values = act.get('traverse_values', [])
+                    if values:
+                        max_loop_count = len(values)
+                        break
+                elif tt == 'sequence':
+                    start = act.get('start', 0)
+                    step = act.get('step', 1)
+                    end = act.get('end', None)
+                    if end is not None and end != '':
+                        seq_count = int((float(end) - start) / step) + 1
+                        max_loop_count = seq_count
+                        break
 
         # 循环次数
         loop_count_frame = ttk.Frame(frame)
@@ -6961,6 +7102,79 @@ class AutoTestGUI:
                 messagebox.showerror("错误", f"输入无效: {str(e)}")
 
         ttk.Button(frame, text="确定", command=confirm).pack(pady=10)
+
+    def _sync_parent_loop_count(self, row_id):
+        """同步上层循环组的循环次数上限和当前值"""
+        parts = row_id.split('_')
+        if not parts or parts[0] != 'loop':
+            return
+
+        # 找到对应的循环组
+        if len(parts) == 2:
+            idx = int(parts[1])
+            action = self.actions[idx]
+        elif len(parts) >= 3:
+            idx = int(parts[1])
+            action = self.actions[idx]
+            for p in parts[2:]:
+                action = action.get('loop_actions', [])[int(p)]
+        else:
+            return
+
+        if action.get('type') != 'loop_group':
+            return
+
+        # 重新计算上限
+        loop_actions = action.get('loop_actions', [])
+        max_loop_count = 9999
+        for act in loop_actions:
+            if act.get('type') == 'traverse_input':
+                tt = act.get('traverse_type', 'list')
+                if tt == 'list':
+                    values = act.get('traverse_values', [])
+                    if values:
+                        max_loop_count = len(values)
+                        break
+                elif tt == 'sequence':
+                    start = act.get('start', 0)
+                    step = act.get('step', 1)
+                    end = act.get('end', None)
+                    if end is not None and end != '':
+                        try:
+                            seq_count = int((float(end) - start) / step) + 1
+                            max_loop_count = seq_count
+                            break
+                        except (ValueError, ZeroDivisionError):
+                            pass
+
+        # 遍历所有可见的 Toplevel 窗口，找到循环次数 spinbox 并更新
+        def find_all_children(widget):
+            children = []
+            for child in widget.winfo_children():
+                children.append(child)
+                children.extend(find_all_children(child))
+            return children
+
+        for toplevel in self.root.winfo_children():
+            if not isinstance(toplevel, tk.Toplevel):
+                continue
+            if not toplevel.winfo_viewable():
+                continue
+            # 遍历所有子孙控件找 spinbox
+            all_descendants = find_all_children(toplevel)
+            for child in all_descendants:
+                if isinstance(child, ttk.Spinbox):
+                    try:
+                        to_val = child.cget('to')
+                        if isinstance(to_val, (int, float)) and 1 < to_val < 10000:
+                            # 找到了循环次数 spinbox
+                            child.configure(to=max_loop_count)
+                            # 立即将值也设为序列数量（小数点后为0时显示整数）
+                            child.delete(0, tk.END)
+                            child.insert(0, str(int(max_loop_count) if max_loop_count == int(max_loop_count) else max_loop_count))
+                            return  # 找到就返回，避免被其他 spinbox 覆盖
+                    except tk.TclError:
+                        pass
 
     def _edit_top_loop_group(self, action, index):
         """编辑顶层的循环组"""
@@ -6986,11 +7200,21 @@ class AutoTestGUI:
         loop_actions = action.get('loop_actions', [])
         max_loop_count = 9999
         for act in loop_actions:
-            if act.get('type') == 'traverse_input' and act.get('traverse_type') == 'list':
-                values = act.get('traverse_values', [])
-                if values:
-                    max_loop_count = len(values)
-                    break
+            if act.get('type') == 'traverse_input':
+                tt = act.get('traverse_type', 'list')
+                if tt == 'list':
+                    values = act.get('traverse_values', [])
+                    if values:
+                        max_loop_count = len(values)
+                        break
+                elif tt == 'sequence':
+                    start = act.get('start', 0)
+                    step = act.get('step', 1)
+                    end = act.get('end', None)
+                    if end is not None and end != '':
+                        seq_count = int((float(end) - start) / step) + 1
+                        max_loop_count = seq_count
+                        break
 
         # 循环次数
         loop_count_frame = ttk.Frame(frame)

@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['e:/AI/ATest/auto_test_gui(3).py'],
+    ['e:/AI/ATest/auto_test_gui.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='AutoTestGUI',
+    name='AutoTestGUI_V2.30',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
