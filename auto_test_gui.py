@@ -343,10 +343,12 @@ class AutoTestGUI:
         
         playback_scrollbar = ttk.Scrollbar(playback_frame)
         playback_scrollbar.grid(row=0, column=1, sticky="ns")
-        
-        self.playback_list = tk.Listbox(
+
+        self.playback_list = tk.Text(
             playback_frame,
-            yscrollcommand=playback_scrollbar.set
+            yscrollcommand=playback_scrollbar.set,
+            wrap=tk.WORD,
+            width=40
         )
         self.playback_list.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         playback_scrollbar.config(command=self.playback_list.yview)
@@ -1714,8 +1716,8 @@ class AutoTestGUI:
     def _do_update_playback_info(self, text):
         """实际更新UI的方法（必须在主线程中调用）"""
         try:
-            self.playback_list.insert(tk.END, text)
-            self.playback_list.yview_moveto(1)
+            self.playback_list.insert(tk.END, text + "\n")
+            self.playback_list.see(tk.END)
             self.playback_list.update()
         except tk.TclError:
             # 窗口可能已关闭
