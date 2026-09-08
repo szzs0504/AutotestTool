@@ -1732,7 +1732,7 @@ class AutoTestGUI:
             True: 睡眠正常完成
             False: 被故障保护中断
         """
-        check_interval = 0.1  # 每0.1秒检查一次
+        check_interval = 0.05  # 每0.05秒检查一次
         elapsed = 0.0
         while elapsed < duration:
             remaining = duration - elapsed
