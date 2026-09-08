@@ -1520,10 +1520,12 @@ class AutoTestGUI:
 
                                 if action_delay > 0:
                                     self.update_playback_info(f"  等待 {action_delay}秒 → {desc}")
-                                    time.sleep(action_delay)
                                 else:
                                     self.update_playback_info(desc)
                                 self._execute_single_action(loop_action, loop_idx)
+                                # 动作完成后等待延时
+                                if action_delay > 0:
+                                    time.sleep(action_delay)
 
                             # 循环间隔
                             if loop_idx < loop_count - 1:
