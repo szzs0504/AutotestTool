@@ -1358,7 +1358,9 @@ class AutoTestGUI:
                         return
 
                     # 计算需要等待的时间（直接使用 delay 字段）
-                    if i > 0:
+                    # 延时类型的动作（delay, random_delay, multiply_delay, arithmetic_delay, screenshot）
+                    # 有自己的 time.sleep() 处理等待，不需要预等待，避免双重等待
+                    if i > 0 and action['type'] not in ('delay', 'random_delay', 'multiply_delay', 'arithmetic_delay', 'screenshot'):
                         wait_time = action.get('delay', 0)
                         if wait_time > 0:
                             if not self._safe_sleep_with_failsafe(wait_time, index):
@@ -1518,6 +1520,7 @@ class AutoTestGUI:
 
                                 if action_delay > 0:
                                     self.update_playback_info(f"  等待 {action_delay}秒 → {desc}")
+                                    time.sleep(action_delay)
                                 else:
                                     self.update_playback_info(desc)
                                 self._execute_single_action(loop_action, loop_idx)
