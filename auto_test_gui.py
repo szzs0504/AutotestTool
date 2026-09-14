@@ -1064,7 +1064,11 @@ class AutoTestGUI:
         if action_type == 'click':
             button = action.get('button', 'left')
             # 使用Windows API移动光标并点击
-            ctypes.windll.user32.SetCursorPos(action['x'], action['y'])
+            # 先获取虚拟屏幕偏移
+            class POINT(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+            pt = POINT(action['x'], action['y'])
+            ctypes.windll.user32.SetPhysicalCursorPos(action['x'], action['y'])
             if button == 'left':
                 ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
                 ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
@@ -1406,7 +1410,7 @@ class AutoTestGUI:
                         # 使用Windows API移动光标并点击
                         print(f"[DEBUG] 回放录制坐标: ({action['x']}, {action['y']})")
                         # 设置光标位置
-                        ctypes.windll.user32.SetCursorPos(action['x'], action['y'])
+                        ctypes.windll.user32.SetPhysicalCursorPos(action['x'], action['y'])
                         # 执行点击
                         if button == 'left':
                             ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
@@ -1426,7 +1430,7 @@ class AutoTestGUI:
                             self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
                         else:
                             self.update_playback_info(action_desc)
-                        ctypes.windll.user32.SetCursorPos(action['x'], action['y'])
+                        ctypes.windll.user32.SetPhysicalCursorPos(action['x'], action['y'])
                         ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
                         ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
                         time.sleep(0.05)
