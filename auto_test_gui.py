@@ -1062,16 +1062,18 @@ class AutoTestGUI:
 
         action_type = action.get('type')
         if action_type == 'click':
-            from pynput.mouse import Controller
-            mouse_ctrl = Controller()
-            mouse_ctrl.position = (action['x'], action['y'])
             button = action.get('button', 'left')
+            # 使用Windows API移动光标并点击
+            ctypes.windll.user32.SetCursorPos(action['x'], action['y'])
             if button == 'left':
-                mouse_ctrl.click(mouse.Button.left)
+                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
             elif button == 'right':
-                mouse_ctrl.click(mouse.Button.right)
+                ctypes.windll.user32.mouse_event(0x0008, 0, 0, 0, 0)  # MOUSEEVENTF_RIGHTDOWN
+                ctypes.windll.user32.mouse_event(0x0010, 0, 0, 0, 0)  # MOUSEEVENTF_RIGHTUP
             else:
-                mouse_ctrl.click(mouse.Button.middle)
+                ctypes.windll.user32.mouse_event(0x0020, 0, 0, 0, 0)  # MOUSEEVENTF_MIDDLEDOWN
+                ctypes.windll.user32.mouse_event(0x0040, 0, 0, 0, 0)  # MOUSEEVENTF_MIDDLEUP
         elif action_type == 'doubleclick':
             pyautogui.moveTo(action['x'], action['y'], duration=0.1)
             pyautogui.doubleClick(x=action['x'], y=action['y'])
@@ -1401,17 +1403,20 @@ class AutoTestGUI:
                         else:
                             self.update_playback_info(action_desc)
                         button = action.get('button', 'left')
-                        # 使用pynput的鼠标控制器移动到位置并点击（与录制使用相同坐标系统）
-                        from pynput.mouse import Controller
-                        mouse_ctrl = Controller()
-                        mouse_ctrl.position = (action['x'], action['y'])
-                        # 使用pynput直接点击，不用pyautogui（避免坐标系统冲突）
+                        # 使用Windows API移动光标并点击
+                        print(f"[DEBUG] 回放录制坐标: ({action['x']}, {action['y']})")
+                        # 设置光标位置
+                        ctypes.windll.user32.SetCursorPos(action['x'], action['y'])
+                        # 执行点击
                         if button == 'left':
-                            mouse_ctrl.click(mouse.Button.left)
+                            ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+                            ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
                         elif button == 'right':
-                            mouse_ctrl.click(mouse.Button.right)
+                            ctypes.windll.user32.mouse_event(0x0008, 0, 0, 0, 0)  # MOUSEEVENTF_RIGHTDOWN
+                            ctypes.windll.user32.mouse_event(0x0010, 0, 0, 0, 0)  # MOUSEEVENTF_RIGHTUP
                         else:
-                            mouse_ctrl.click(mouse.Button.middle)
+                            ctypes.windll.user32.mouse_event(0x0020, 0, 0, 0, 0)  # MOUSEEVENTF_MIDDLEDOWN
+                            ctypes.windll.user32.mouse_event(0x0040, 0, 0, 0, 0)  # MOUSEEVENTF_MIDDLEUP
                     elif action['type'] == 'doubleclick':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
@@ -1421,12 +1426,12 @@ class AutoTestGUI:
                             self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
                         else:
                             self.update_playback_info(action_desc)
-                        from pynput.mouse import Controller
-                        mouse_ctrl = Controller()
-                        mouse_ctrl.position = (action['x'], action['y'])
-                        mouse_ctrl.click(mouse.Button.left)
+                        ctypes.windll.user32.SetCursorPos(action['x'], action['y'])
+                        ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+                        ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
                         time.sleep(0.05)
-                        mouse_ctrl.click(mouse.Button.left)
+                        ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+                        ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
                     elif action['type'] == 'input':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
