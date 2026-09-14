@@ -1067,11 +1067,11 @@ class AutoTestGUI:
             mouse_ctrl.position = (action['x'], action['y'])
             button = action.get('button', 'left')
             if button == 'left':
-                mouse_ctrl.click(action['x'], action['y'], mouse.Button.left)
+                mouse_ctrl.click(mouse.Button.left)
             elif button == 'right':
-                mouse_ctrl.click(action['x'], action['y'], mouse.Button.right)
+                mouse_ctrl.click(mouse.Button.right)
             else:
-                mouse_ctrl.click(action['x'], action['y'], mouse.Button.middle)
+                mouse_ctrl.click(mouse.Button.middle)
         elif action_type == 'doubleclick':
             pyautogui.moveTo(action['x'], action['y'], duration=0.1)
             pyautogui.doubleClick(x=action['x'], y=action['y'])
@@ -1407,11 +1407,11 @@ class AutoTestGUI:
                         mouse_ctrl.position = (action['x'], action['y'])
                         # 使用pynput直接点击，不用pyautogui（避免坐标系统冲突）
                         if button == 'left':
-                            mouse_ctrl.click(action['x'], action['y'], mouse.Button.left)
+                            mouse_ctrl.click(mouse.Button.left)
                         elif button == 'right':
-                            mouse_ctrl.click(action['x'], action['y'], mouse.Button.right)
+                            mouse_ctrl.click(mouse.Button.right)
                         else:
-                            mouse_ctrl.click(action['x'], action['y'], mouse.Button.middle)
+                            mouse_ctrl.click(mouse.Button.middle)
                     elif action['type'] == 'doubleclick':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
@@ -1424,9 +1424,9 @@ class AutoTestGUI:
                         from pynput.mouse import Controller
                         mouse_ctrl = Controller()
                         mouse_ctrl.position = (action['x'], action['y'])
-                        mouse_ctrl.click(action['x'], action['y'], mouse.Button.left)
+                        mouse_ctrl.click(mouse.Button.left)
                         time.sleep(0.05)
-                        mouse_ctrl.click(action['x'], action['y'], mouse.Button.left)
+                        mouse_ctrl.click(mouse.Button.left)
                     elif action['type'] == 'input':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
