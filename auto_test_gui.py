@@ -1062,9 +1062,16 @@ class AutoTestGUI:
 
         action_type = action.get('type')
         if action_type == 'click':
-            pyautogui.moveTo(action['x'], action['y'], duration=0.1)
+            from pynput.mouse import Controller
+            mouse_ctrl = Controller()
+            mouse_ctrl.position = (action['x'], action['y'])
             button = action.get('button', 'left')
-            pyautogui.click(x=action['x'], y=action['y'], button=button)
+            if button == 'left':
+                mouse_ctrl.click(mouse_ctrl.position, mouse.Button.left)
+            elif button == 'right':
+                mouse_ctrl.click(mouse_ctrl.position, mouse.Button.right)
+            else:
+                mouse_ctrl.click(mouse_ctrl.position, mouse.Button.middle)
         elif action_type == 'doubleclick':
             pyautogui.moveTo(action['x'], action['y'], duration=0.1)
             pyautogui.doubleClick(x=action['x'], y=action['y'])
