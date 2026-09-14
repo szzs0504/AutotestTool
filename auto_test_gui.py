@@ -990,6 +990,8 @@ class AutoTestGUI:
                 elif tt == 'sequence':
                     start = action.get('start', 0)
                     step = action.get('step', 1)
+                    if step == 0:
+                        continue  # 跳过步距为0的序列
                     end = action.get('end', None)
                     if end is not None and end != '':
                         seq_count = int((float(end) - start) / step) + 1
@@ -1185,6 +1187,9 @@ class AutoTestGUI:
                 start = action.get('start', 0)
                 step = action.get('step', 1)
                 end = action.get('end', None)
+                if step == 0:
+                    self.update_playback_info("数值序列: 步距不能为0")
+                    return
                 if end is not None and end != '':
                     end = float(end)
                     seq_count = int((end - start) / step) + 1
@@ -1634,6 +1639,9 @@ class AutoTestGUI:
                         if traverse_type == 'sequence':
                             start = action.get('start', 0)
                             step = action.get('step', 1)
+                            if step == 0:
+                                self.update_playback_info("数值序列: 步距不能为0")
+                                continue
                             end = action.get('end', None)
                             if end is not None and end != '':
                                 end = float(end)
@@ -4095,6 +4103,8 @@ class AutoTestGUI:
                 elif tt == 'sequence':
                     start = act.get('start', 0)
                     step = act.get('step', 1)
+                    if step == 0:
+                        continue
                     end = act.get('end', None)
                     if end is not None and end != '':
                         seq_count = int((float(end) - start) / step) + 1
@@ -7083,6 +7093,8 @@ class AutoTestGUI:
                 elif tt == 'sequence':
                     start = act.get('start', 0)
                     step = act.get('step', 1)
+                    if step == 0:
+                        continue
                     end = act.get('end', None)
                     if end is not None and end != '':
                         seq_count = int((float(end) - start) / step) + 1
@@ -7218,6 +7230,8 @@ class AutoTestGUI:
                 elif tt == 'sequence':
                     start = act.get('start', 0)
                     step = act.get('step', 1)
+                    if step == 0:
+                        continue
                     end = act.get('end', None)
                     if end is not None and end != '':
                         seq_count = int((float(end) - start) / step) + 1
