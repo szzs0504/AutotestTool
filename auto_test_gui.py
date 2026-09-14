@@ -1063,21 +1063,9 @@ class AutoTestGUI:
         action_type = action.get('type')
         if action_type == 'click':
             button = action.get('button', 'left')
-            # 使用Windows API移动光标并点击
-            # 先获取虚拟屏幕偏移
-            class POINT(ctypes.Structure):
-                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-            pt = POINT(action['x'], action['y'])
-            ctypes.windll.user32.SetPhysicalCursorPos(action['x'], action['y'])
-            if button == 'left':
-                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
-                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
-            elif button == 'right':
-                ctypes.windll.user32.mouse_event(0x0008, 0, 0, 0, 0)  # MOUSEEVENTF_RIGHTDOWN
-                ctypes.windll.user32.mouse_event(0x0010, 0, 0, 0, 0)  # MOUSEEVENTF_RIGHTUP
-            else:
-                ctypes.windll.user32.mouse_event(0x0020, 0, 0, 0, 0)  # MOUSEEVENTF_MIDDLEDOWN
-                ctypes.windll.user32.mouse_event(0x0040, 0, 0, 0, 0)  # MOUSEEVENTF_MIDDLEUP
+            # 使用pyautogui移动并点击
+            pyautogui.moveTo(action['x'], action['y'], duration=0)
+            pyautogui.click(button=button)
         elif action_type == 'doubleclick':
             pyautogui.moveTo(action['x'], action['y'], duration=0.1)
             pyautogui.doubleClick(x=action['x'], y=action['y'])
@@ -1407,20 +1395,9 @@ class AutoTestGUI:
                         else:
                             self.update_playback_info(action_desc)
                         button = action.get('button', 'left')
-                        # 使用Windows API移动光标并点击
-                        print(f"[DEBUG] 回放录制坐标: ({action['x']}, {action['y']})")
-                        # 设置光标位置
-                        ctypes.windll.user32.SetPhysicalCursorPos(action['x'], action['y'])
-                        # 执行点击
-                        if button == 'left':
-                            ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
-                            ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
-                        elif button == 'right':
-                            ctypes.windll.user32.mouse_event(0x0008, 0, 0, 0, 0)  # MOUSEEVENTF_RIGHTDOWN
-                            ctypes.windll.user32.mouse_event(0x0010, 0, 0, 0, 0)  # MOUSEEVENTF_RIGHTUP
-                        else:
-                            ctypes.windll.user32.mouse_event(0x0020, 0, 0, 0, 0)  # MOUSEEVENTF_MIDDLEDOWN
-                            ctypes.windll.user32.mouse_event(0x0040, 0, 0, 0, 0)  # MOUSEEVENTF_MIDDLEUP
+                        # 使用pyautogui移动并点击
+                        pyautogui.moveTo(action['x'], action['y'], duration=0)
+                        pyautogui.click(button=button)
                     elif action['type'] == 'doubleclick':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
@@ -1430,12 +1407,8 @@ class AutoTestGUI:
                             self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
                         else:
                             self.update_playback_info(action_desc)
-                        ctypes.windll.user32.SetPhysicalCursorPos(action['x'], action['y'])
-                        ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
-                        ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
-                        time.sleep(0.05)
-                        ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
-                        ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
+                        pyautogui.moveTo(action['x'], action['y'], duration=0.1)
+                        pyautogui.doubleClick(x=action['x'], y=action['y'])
                     elif action['type'] == 'input':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
