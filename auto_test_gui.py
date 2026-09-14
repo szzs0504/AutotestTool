@@ -1394,10 +1394,17 @@ class AutoTestGUI:
                         else:
                             self.update_playback_info(action_desc)
                         button = action.get('button', 'left')
-                        # 调试：显示录制坐标与实际鼠标位置
-                        import pyautogui as pag
-                        self.update_playback_info(f"  [调试] 录制:({action['x']},{action['y']}) 当前鼠标:{pag.position()}")
-                        pyautogui.click(x=action['x'], y=action['y'], button=button)
+                        # 使用pynput的鼠标控制器移动到位置并点击（与录制使用相同坐标系统）
+                        from pynput.mouse import Controller
+                        mouse_ctrl = Controller()
+                        mouse_ctrl.position = (action['x'], action['y'])
+                        # 使用pynput直接点击，不用pyautogui（避免坐标系统冲突）
+                        if button == 'left':
+                            mouse_ctrl.click(mouse_ctrl.position, mouse.Button.left)
+                        elif button == 'right':
+                            mouse_ctrl.click(mouse_ctrl.position, mouse.Button.right)
+                        else:
+                            mouse_ctrl.click(mouse_ctrl.position, mouse.Button.middle)
                     elif action['type'] == 'doubleclick':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
@@ -1407,8 +1414,12 @@ class AutoTestGUI:
                             self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
                         else:
                             self.update_playback_info(action_desc)
-                        pyautogui.moveTo(action['x'], action['y'], duration=0.2)
-                        pyautogui.doubleClick(x=action['x'], y=action['y'])
+                        from pynput.mouse import Controller
+                        mouse_ctrl = Controller()
+                        mouse_ctrl.position = (action['x'], action['y'])
+                        mouse_ctrl.click(mouse_ctrl.position, mouse.Button.left)
+                        time.sleep(0.05)
+                        mouse_ctrl.click(mouse_ctrl.position, mouse.Button.left)
                     elif action['type'] == 'input':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
