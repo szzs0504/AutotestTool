@@ -1307,7 +1307,7 @@ class AutoTestGUI:
         pyautogui.FAILSAFE = False
 
         # 清空回放信息列表（使用root.after确保线程安全）
-        self.root.after(0, lambda: self.playback_list.delete(0, tk.END))
+        self.root.after(0, lambda: self.playback_list.delete("1.0", tk.END))
         self.root.after(0, lambda: self.status_var.set("正在执行..."))
         if not self.actions:
             return
@@ -1394,6 +1394,9 @@ class AutoTestGUI:
                         else:
                             self.update_playback_info(action_desc)
                         button = action.get('button', 'left')
+                        # 调试：显示录制坐标与实际鼠标位置
+                        import pyautogui as pag
+                        self.update_playback_info(f"  [调试] 录制:({action['x']},{action['y']}) 当前鼠标:{pag.position()}")
                         pyautogui.click(x=action['x'], y=action['y'], button=button)
                     elif action['type'] == 'doubleclick':
                         delay = action.get('delay', 0)
