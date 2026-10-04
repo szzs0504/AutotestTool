@@ -1727,7 +1727,7 @@ class AutoTestGUI:
         try:
             self.playback_list.insert(tk.END, text + "\n")
             self.playback_list.see(tk.END)
-            self.playback_list.update()
+            # 移除update()调用以降低CPU占用
         except tk.TclError:
             # 窗口可能已关闭
             pass
