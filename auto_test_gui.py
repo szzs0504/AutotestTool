@@ -1045,7 +1045,7 @@ class AutoTestGUI:
                                 last_position = current_position
                                 self.last_move_time = current_time
 
-                    time.sleep(0.005)  # 减少CPU使用率但保持响应性
+                    time.sleep(0.05)  # 减少CPU使用率
                 except Exception as e:
                     print(f"记录动作时出错: {e}")
                     continue
@@ -1900,7 +1900,6 @@ class AutoTestGUI:
         if select_index is not None and isinstance(select_index, str):
             self.action_tree.update_idletasks()
             self._expand_ancestors(select_index)
-            self.action_tree.update_idletasks()
 
         # 如果没有循环组执行递归调用，在这里执行选择逻辑
         has_loop_group = any(a.get('type') in ['loop_group', 'input_loop'] for a in self.actions)
@@ -4872,20 +4871,39 @@ class AutoTestGUI:
             dialog.grab_release()
             dialog.update()
 
-            # 更新动作列表显示
+            # 更新动作列表显示 - 增量更新避免频繁重建
             def update_temp_actions_list():
-                """更新循环内动作列表显示"""
-                for item in loop_action_tree.get_children():
-                    loop_action_tree.delete(item)
-                for idx, act in enumerate(loop_actions):
-                    desc = self._describe_action(act)
-                    act_type = act.get('type')
-                    if act_type == 'delay':
-                        delay_text = f"{act.get('delay', 1.0):.1f}s"
-                    else:
-                        delay_text = f"{act.get('time', 0):.1f}s"
-                    remark_text = act.get('remark', '')
-                    loop_action_tree.insert("", tk.END, iid=str(idx), values=(desc, delay_text, remark_text))
+                """更新循环内动作列表显示 - 增量更新"""
+                current_count = len(loop_action_tree.get_children())
+                new_count = len(loop_actions)
+
+                if new_count > current_count:
+                    # 只插入新增的项
+                    for idx in range(current_count, new_count):
+                        act = loop_actions[idx]
+                        desc = self._describe_action(act)
+                        act_type = act.get('type')
+                        if act_type == 'delay':
+                            delay_text = f"{act.get('delay', 1.0):.1f}s"
+                        else:
+                            delay_text = f"{act.get('time', 0):.1f}s"
+                        remark_text = act.get('remark', '')
+                        loop_action_tree.insert("", tk.END, iid=str(idx), values=(desc, delay_text, remark_text))
+                elif new_count < current_count:
+                    # 有删除时重建
+                    for item in loop_action_tree.get_children():
+                        loop_action_tree.delete(item)
+                    for idx, act in enumerate(loop_actions):
+                        desc = self._describe_action(act)
+                        act_type = act.get('type')
+                        if act_type == 'delay':
+                            delay_text = f"{act.get('delay', 1.0):.1f}s"
+                        else:
+                            delay_text = f"{act.get('time', 0):.1f}s"
+                        remark_text = act.get('remark', '')
+                        loop_action_tree.insert("", tk.END, iid=str(idx), values=(desc, delay_text, remark_text))
+
+                # 滚动到最后
                 if loop_actions:
                     last_item = loop_action_tree.get_children()[-1]
                     loop_action_tree.see(last_item)
