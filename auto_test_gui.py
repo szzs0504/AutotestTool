@@ -1389,7 +1389,7 @@ class AutoTestGUI:
                         next_is_click = (i < len(self.actions) - 1 and
                                        self.actions[i + 1]['type'] in ['click', 'doubleclick'])
                         if next_is_click:
-                            pyautogui.moveTo(action['x'], action['y'], duration=0.2)
+                            pyautogui.moveTo(action['x'], action['y'], duration=0)
                     elif action['type'] == 'click':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
