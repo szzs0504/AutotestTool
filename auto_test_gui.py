@@ -486,14 +486,15 @@ class AutoTestGUI:
 
             current_time = time.time() - self.record_start_time  # 使用相对时间
             # 计算延时（当前动作与上一个动作的时间差）
-            if self.actions:
-                last_time = self.actions[-1].get('delay', 0) + (self.actions[-1].get('time', 0) if 'time' in self.actions[-1] else 0)
-                # 如果上一个动作没有 time 字段，使用 last_click_time 代替
-                if 'time' not in self.actions[-1]:
-                    last_time = self.last_click_time
-                action_delay = round(current_time - last_time, 1)
-            else:
-                action_delay = round(current_time, 1)
+            with self.actions_lock:
+                if self.actions:
+                    last_time = self.actions[-1].get('delay', 0) + (self.actions[-1].get('time', 0) if 'time' in self.actions[-1] else 0)
+                    # 如果上一个动作没有 time 字段，使用 last_click_time 代替
+                    if 'time' not in self.actions[-1]:
+                        last_time = self.last_click_time
+                    action_delay = round(current_time - last_time, 1)
+                else:
+                    action_delay = round(current_time, 1)
 
             # 检测双击（使用距离阈值，避免精确坐标匹配问题）
             last_x, last_y = self.last_click_position
@@ -503,27 +504,30 @@ class AutoTestGUI:
 
             if is_double_click:
                 # 移除上一次的单击记录
-                if self.actions and self.actions[-1]['type'] == 'click':
-                    self.actions.pop()
-                    self.update_action_list_display()
+                with self.actions_lock:
+                    if self.actions and self.actions[-1]['type'] == 'click':
+                        self.actions.pop()
+                self.update_action_list_display()
                 # 记录双击
-                self.actions.append({
-                    'type': 'doubleclick',
-                    'x': x,
-                    'y': y,
-                    'button': self._button_to_str(button),
-                    'delay': action_delay
-                })
+                with self.actions_lock:
+                    self.actions.append({
+                        'type': 'doubleclick',
+                        'x': x,
+                        'y': y,
+                        'button': self._button_to_str(button),
+                        'delay': action_delay
+                    })
                 self.update_action_list_display()
             else:
                 # 记录单击
-                self.actions.append({
-                    'type': 'click',
-                    'x': x,
-                    'y': y,
-                    'button': self._button_to_str(button),
-                    'delay': action_delay
-                })
+                with self.actions_lock:
+                    self.actions.append({
+                        'type': 'click',
+                        'x': x,
+                        'y': y,
+                        'button': self._button_to_str(button),
+                        'delay': action_delay
+                    })
                 self.update_action_list_display()
 
             self.last_click_time = current_time
@@ -537,22 +541,24 @@ class AutoTestGUI:
 
             current_time = time.time() - self.record_start_time
             # 计算延时
-            if self.actions:
-                last_time = self.last_scroll_time
-                action_delay = round(current_time - last_time, 1)
-            else:
-                action_delay = round(current_time, 1)
+            with self.actions_lock:
+                if self.actions:
+                    last_time = self.last_scroll_time
+                    action_delay = round(current_time - last_time, 1)
+                else:
+                    action_delay = round(current_time, 1)
 
             # 防止滚轮事件记录过于频繁
             if current_time - self.last_scroll_time >= self.scroll_threshold:
-                self.actions.append({
-                    'type': 'scroll',
-                    'x': x,
-                    'y': y,
-                    'dx': dx,
-                    'dy': dy,
-                    'delay': action_delay
-                })
+                with self.actions_lock:
+                    self.actions.append({
+                        'type': 'scroll',
+                        'x': x,
+                        'y': y,
+                        'dx': dx,
+                        'dy': dy,
+                        'delay': action_delay
+                    })
                 self.update_action_list_display()
                 self.last_scroll_time = current_time
 
@@ -583,28 +589,31 @@ class AutoTestGUI:
                     current_keys = list(self.pressed_keys)
 
                     # 计算延时
-                    if self.actions:
-                        last_time = self.last_click_time  # 使用上一次的点击时间作为参考
-                        action_delay = round(current_time - last_time, 1)
-                    else:
-                        action_delay = round(current_time, 1)
+                    with self.actions_lock:
+                        if self.actions:
+                            last_time = self.last_click_time  # 使用上一次的点击时间作为参考
+                            action_delay = round(current_time - last_time, 1)
+                        else:
+                            action_delay = round(current_time, 1)
 
                     # 如果是组合键
                     if current_keys:
                         all_keys = current_keys + [key_str]
-                        self.actions.append({
-                            'type': 'keyboard',
-                            'keys': all_keys,
-                            'delay': action_delay
-                        })
+                        with self.actions_lock:
+                            self.actions.append({
+                                'type': 'keyboard',
+                                'keys': all_keys,
+                                'delay': action_delay
+                            })
                         self.update_action_list_display()
                     else:
                         # 单个键
-                        self.actions.append({
-                            'type': 'keyboard',
-                            'keys': [key_str],
-                            'delay': action_delay
-                        })
+                        with self.actions_lock:
+                            self.actions.append({
+                                'type': 'keyboard',
+                                'keys': [key_str],
+                                'delay': action_delay
+                            })
                         self.update_action_list_display()
         except AttributeError:
             pass
@@ -993,7 +1002,7 @@ class AutoTestGUI:
                     if step == 0:
                         continue  # 跳过步距为0的序列
                     end = action.get('end', None)
-                    if end is not None and end != '':
+                    if end is not None and end != '' and step != 0:
                         seq_count = int((float(end) - start) / step) + 1
                         max_count = seq_count
                         break
@@ -1028,17 +1037,18 @@ class AutoTestGUI:
                             if (last_position != current_position and
                                 current_time - self.last_move_time >= self.move_threshold):
                                 # 计算延时
-                                if self.actions:
-                                    action_delay = round(current_time - self.last_move_time, 1)
-                                else:
-                                    action_delay = round(current_time, 1)
+                                with self.actions_lock:
+                                    if self.actions:
+                                        action_delay = round(current_time - self.last_move_time, 1)
+                                    else:
+                                        action_delay = round(current_time, 1)
 
-                                self.actions.append({
-                                    'type': 'move',
-                                    'x': current_position[0],
-                                    'y': current_position[1],
-                                    'delay': action_delay
-                                })
+                                    self.actions.append({
+                                        'type': 'move',
+                                        'x': current_position[0],
+                                        'y': current_position[1],
+                                        'delay': action_delay
+                                    })
                                 # 使用 root.after 确保在主线程中更新 UI
                                 self.root.after(0, lambda pos=current_position:
                                     self.update_action_list_display())
@@ -1186,10 +1196,10 @@ class AutoTestGUI:
             if traverse_type == 'sequence':
                 start = action.get('start', 0)
                 step = action.get('step', 1)
-                end = action.get('end', None)
                 if step == 0:
                     self.update_playback_info("数值序列: 步距不能为0")
                     return
+                end = action.get('end', None)
                 if end is not None and end != '':
                     end = float(end)
                     seq_count = int((end - start) / step) + 1
@@ -2540,17 +2550,18 @@ class AutoTestGUI:
                         if 0 <= start_child_idx < len(loop_actions) and 0 <= end_child_idx < len(loop_actions) and start_child_idx != end_child_idx:
                             action_time_map = {}
                             action_display_map = {}
-                            for i, loop_action in enumerate(loop_actions):
-                                action_time_map[id(loop_action)] = loop_action.get('time', 0)
-                                if i == 0:
-                                    action_display_map[id(loop_action)] = loop_action.get('time', 0)
-                                else:
-                                    prev_time = loop_actions[i - 1].get('time', 0)
-                                    curr_time = loop_action.get('time', 0)
-                                    action_display_map[id(loop_action)] = curr_time - prev_time
+                            with self.actions_lock:
+                                for i, loop_action in enumerate(loop_actions):
+                                    action_time_map[id(loop_action)] = loop_action.get('time', 0)
+                                    if i == 0:
+                                        action_display_map[id(loop_action)] = loop_action.get('time', 0)
+                                    else:
+                                        prev_time = loop_actions[i - 1].get('time', 0)
+                                        curr_time = loop_action.get('time', 0)
+                                        action_display_map[id(loop_action)] = curr_time - prev_time
 
-                            action = loop_actions.pop(start_child_idx)
-                            loop_actions.insert(end_child_idx, action)
+                                action = loop_actions.pop(start_child_idx)
+                                loop_actions.insert(end_child_idx, action)
 
                             cumulative = 0
                             for loop_action in loop_actions:
@@ -2587,19 +2598,20 @@ class AutoTestGUI:
                         # 在 pop/insert 之前，记录每个动作的 time 值
                         # 用 id(action) 作为键，这样排序后还能找到每个动作原本的 time 值
                         action_time_map = {}
-                        for action in self.actions:
-                            action_time_map[id(action)] = action.get('time', 0)
+                        with self.actions_lock:
+                            for action in self.actions:
+                                action_time_map[id(action)] = action.get('time', 0)
 
-                        # 在 pop/insert 之前，记录排序前的列表副本
-                        actions_list_before = list(self.actions)
+                            # 在 pop/insert 之前，记录排序前的列表副本
+                            actions_list_before = list(self.actions)
 
-                        # 记录移动的动作
-                        action = self.actions[start_idx]
+                            # 记录移动的动作
+                            action = self.actions[start_idx]
 
-                        # 执行 pop 和 insert
-                        self.actions.pop(start_idx)
-                        insert_pos = end_idx if end_idx <= start_idx else end_idx
-                        self.actions.insert(insert_pos, action)
+                            # 执行 pop 和 insert
+                            self.actions.pop(start_idx)
+                            insert_pos = end_idx if end_idx <= start_idx else end_idx
+                            self.actions.insert(insert_pos, action)
 
                         # 重建 time 字段：根据动作原本的 time 值，重新计算列表中的 time
                         self._rebuild_action_times(action_time_map, actions_list_before)
@@ -4847,7 +4859,7 @@ class AutoTestGUI:
                     count = len([i for i in sel if isinstance(i, int)])
                     hint_status.config(text=f"当前选中: {count} 个动作")
                     select_hint_window.after(300, update_selection_count)
-                except:
+                except Exception:
                     pass
             update_selection_count()
 
@@ -6170,7 +6182,7 @@ class AutoTestGUI:
                     count = len([i for i in sel if isinstance(i, int)])
                     hint_status.config(text=f"当前选中: {count} 个动作")
                     hint_win.after(500, update_selection_count)
-                except:
+                except Exception:
                     pass
             update_selection_count()
 
@@ -7803,7 +7815,8 @@ class AutoTestGUI:
                 'filename': ss_name_var.get(),
                 'delay': ss_delay_var.get()
             }
-            self.actions.append(screenshot_action)
+            with self.actions_lock:
+                self.actions.append(screenshot_action)
             self._update_action_list(scroll_to_end=True)
             dialog.destroy()
 
