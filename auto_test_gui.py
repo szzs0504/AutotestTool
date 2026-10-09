@@ -79,6 +79,7 @@ class AutoTestGUI:
         self.in_dialog_operation = False  # 在对话框操作时不记录
         self.test_index = 0
         self.test_index_lock = Lock()  # 保护test_index的锁
+        self._variable_counter_lock = Lock()  # 保护_variable_counter
         self.mouse_listener = None
         self.keyboard_listener = None
         self.last_click_time = 0
@@ -897,7 +898,8 @@ class AutoTestGUI:
             if self.is_playing:
                 # 回放过程中按Ctrl+Shift+L不做任何反应
                 return
-            self.actions = []
+            with self.actions_lock:
+                self.actions = []
             self._update_action_list()
             self.is_recording = True
             self.record_btn.config(text="停止录制")
@@ -987,7 +989,9 @@ class AutoTestGUI:
     def _update_loop_count_max(self):
         """更新主界面循环次数的最大值，如果动作列表中有列表遍历或序列遍历类型的输入"""
         max_count = 9999
-        for action in self.actions:
+        with self.actions_lock:
+            actions_snapshot = list(self.actions)
+        for action in actions_snapshot:
             # 只检查顶层动作，不检查循环组内的嵌套动作
             if action.get('type') == 'traverse_input':
                 tt = action.get('traverse_type', 'list')
@@ -1354,7 +1358,11 @@ class AutoTestGUI:
 
                 self.update_playback_info(f"开始执行第 {loop + 1}/{loops} 轮")
 
-                for i, action in enumerate(self.actions):
+                # 复制actions列表以避免迭代过程中被修改
+                with self.actions_lock:
+                    actions_snapshot = list(self.actions)
+
+                for i, action in enumerate(actions_snapshot):
                     # 检查是否按下Ctrl+Q（兼容性处理，防止遗漏）
                     if not self.is_playing:
                         self.play_btn.config(state='normal', text="开始回放")
@@ -1612,13 +1620,14 @@ class AutoTestGUI:
                         target_y = action.get('y')
                         clear_text = action.get('clear_text', False)
 
-                        # 计算当前变量值
-                        if not hasattr(self, '_variable_counter'):
-                            self._variable_counter = {}
-                        key = id(action)
-                        if key not in self._variable_counter:
-                            self._variable_counter[key] = start
-                        current_value = self._variable_counter[key]
+                        # 计算当前变量值（线程安全）
+                        with self._variable_counter_lock:
+                            if not hasattr(self, '_variable_counter'):
+                                self._variable_counter = {}
+                            key = id(action)
+                            if key not in self._variable_counter:
+                                self._variable_counter[key] = start
+                            current_value = self._variable_counter[key]
 
                         # 如果有目标位置，先移动到目标位置
                         if target_x is not None and target_y is not None:
@@ -1637,8 +1646,9 @@ class AutoTestGUI:
                         pyautogui.write(text_to_input, interval=0.02)
                         self.update_playback_info(f"变量输入: {text_to_input}")
 
-                        # 更新变量值
-                        self._variable_counter[key] = current_value + step
+                        # 更新变量值（线程安全）
+                        with self._variable_counter_lock:
+                            self._variable_counter[key] = current_value + step
                     elif action['type'] == 'traverse_input':
                         # 输入：根据循环轮次使用不同的值
                         traverse_type = action.get('traverse_type', 'list')
@@ -1825,15 +1835,22 @@ class AutoTestGUI:
 
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                self.actions = json.load(f)
+                loaded_actions = json.load(f)
             # 兼容旧格式的 button 值（如 "Button.left" → "left"）
-            for action in self.actions:
+            for action in loaded_actions:
                 if action.get('type') in ('click', 'doubleclick'):
                     btn = action.get('button', '')
                     if isinstance(btn, str) and btn.startswith('Button.'):
                         action['button'] = btn[len('Button.'):]
             # 为每个动作设置 delay（兼容旧格式）
-            for i, action in enumerate(self.actions):
+            for i, action in enumerate(loaded_actions):
+                if 'delay' not in action:
+                    if i == 0:
+                        action['delay'] = action.get('time', 0)
+                    else:
+                        prev_time = loaded_actions[i - 1].get('time', 0)
+            with self.actions_lock:
+                self.actions = loaded_actions
                 if 'delay' not in action:
                     if i == 0:
                         action['delay'] = action.get('time', 0)
@@ -2169,12 +2186,13 @@ class AutoTestGUI:
     def _build_relative_delay_cache(self):
         """构建相对延时缓存，从前往后遍历一次"""
         self._relative_delay_cache = {}
-        if not self.actions:
-            self._relative_delay_valid = True
-            return
+        with self.actions_lock:
+            if not self.actions:
+                self._relative_delay_valid = True
+                return
 
-        prev_time = 0
-        for j, action in enumerate(self.actions):
+            prev_time = 0
+            for j, action in enumerate(self.actions):
             if 'time' in action:
                 current_time = action['time']
                 self._relative_delay_cache[j] = max(0.0, current_time - prev_time)
