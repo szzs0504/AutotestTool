@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='AutoTestGUI_V2.38',
+    name='AutoTestGUI_V2.40',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
