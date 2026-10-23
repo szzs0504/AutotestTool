@@ -4,3 +4,5 @@ dist/
 *.pyc
 .claude/settings.local.json
 screenshots/*.png
+actions/
+.serena/

@@ -249,7 +249,7 @@ class AutoTestGUI:
 
         # 次数
         ttk.Label(loop_frame, text="次数:").pack(side=tk.LEFT, padx=2)
-        self.loop_count = tk.IntVar(value=1)  # 默认循环1次
+        # 注：self.loop_count 已在 __init__ 中创建，此处直接复用，避免出现两个实例
         self.loop_spinbox = ttk.Spinbox(loop_frame, from_=1, to=9999, width=4, textvariable=self.loop_count)
         self.loop_spinbox.pack(side=tk.LEFT, padx=2)
         self._update_loop_count_max()
@@ -1794,11 +1794,41 @@ class AutoTestGUI:
 
         return True
 
+    def _collect_global_settings(self):
+        """收集主界面的全局回放设置"""
+        return {
+            'loop_count': self.loop_count.get(),
+            'loop_interval': self.loop_interval.get(),
+            'interval_random': self.interval_random.get(),
+            'interval_min': self.interval_min.get(),
+            'interval_max': self.interval_max.get(),
+        }
+
+    def _apply_global_settings(self, settings):
+        """应用全局回放设置（加载动作文件时调用）"""
+        if not isinstance(settings, dict):
+            return
+        try:
+            if 'loop_count' in settings:
+                self.loop_count.set(int(settings['loop_count']))
+            if 'loop_interval' in settings:
+                self.loop_interval.set(float(settings['loop_interval']))
+            if 'interval_random' in settings:
+                self.interval_random.set(bool(settings['interval_random']))
+            if 'interval_min' in settings:
+                self.interval_min.set(float(settings['interval_min']))
+            if 'interval_max' in settings:
+                self.interval_max.set(float(settings['interval_max']))
+            # 同步间隔输入框的启用状态
+            self.toggle_interval_mode()
+        except (TypeError, ValueError) as e:
+            print(f"应用循环设置失败: {e}")
+
     def save_actions(self):
         if not self.actions:
             messagebox.showwarning("警告", "没有动作可保存！")
             return
-        
+
         # 创建保存文件对话框
         filepath = filedialog.asksaveasfilename(
             initialdir=self.save_dir,
@@ -1807,16 +1837,23 @@ class AutoTestGUI:
             filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")],
             initialfile="新动作.json"
         )
-        
+
         if filepath:
             try:
                 # 确保目录存在（检查dirname是否为空）
                 dir_path = os.path.dirname(filepath)
                 if dir_path:
                     os.makedirs(dir_path, exist_ok=True)
-                # 保存文件
+                # 保存文件（含全局循环设置）
+                with self.actions_lock:
+                    actions_snapshot = list(self.actions)
+                data = {
+                    'version': 2,
+                    'settings': self._collect_global_settings(),
+                    'actions': actions_snapshot
+                }
                 with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(self.actions, f, ensure_ascii=False, indent=2)
+                    json.dump(data, f, ensure_ascii=False, indent=2)
                 self.status_var.set(f"动作已保存至: {filepath}")
                 messagebox.showinfo("成功", "动作已保存！")
             except Exception as e:
@@ -1829,36 +1866,59 @@ class AutoTestGUI:
             title="选择要加载的动作文件",
             filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")]
         )
-        
+
         if not filepath:
             return
 
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                loaded_actions = json.load(f)
+                loaded = json.load(f)
+
+            # 兼容两种格式：
+            #   新版：{"version":2, "settings": {...}, "actions": [...]}
+            #   旧版：[...]  （纯动作数组，无全局设置）
+            if isinstance(loaded, dict):
+                loaded_actions = loaded.get('actions', [])
+                loaded_settings = loaded.get('settings', {})
+            elif isinstance(loaded, list):
+                loaded_actions = loaded
+                loaded_settings = {}
+            else:
+                raise ValueError("动作文件格式无效（期望动作数组或对象）")
+
+            if not isinstance(loaded_actions, list):
+                raise ValueError("动作数据格式无效（期望数组）")
+
             # 兼容旧格式的 button 值（如 "Button.left" → "left"）
             for action in loaded_actions:
                 if action.get('type') in ('click', 'doubleclick'):
                     btn = action.get('button', '')
                     if isinstance(btn, str) and btn.startswith('Button.'):
                         action['button'] = btn[len('Button.'):]
-            # 为每个动作设置 delay（兼容旧格式）
+
+            # 为每个动作设置 delay（兼容旧格式：没有delay字段时用time差值计算）
             for i, action in enumerate(loaded_actions):
                 if 'delay' not in action:
                     if i == 0:
                         action['delay'] = action.get('time', 0)
                     else:
                         prev_time = loaded_actions[i - 1].get('time', 0)
-            with self.actions_lock:
-                self.actions = loaded_actions
-                if 'delay' not in action:
-                    if i == 0:
-                        action['delay'] = action.get('time', 0)
-                    else:
-                        prev_time = self.actions[i - 1].get('time', 0)
                         curr_time = action.get('time', 0)
                         action['delay'] = curr_time - prev_time
+
+            with self.actions_lock:
+                self.actions = loaded_actions
+
+            # 恢复全局循环设置（次数/间隔/随机范围）
+            if loaded_settings:
+                self._apply_global_settings(loaded_settings)
+
             self._update_action_list()  # 更新动作列表显示
+            if loaded_settings:
+                interval_text = ("随机 %.2f~%.2f秒" % (self.interval_min.get(), self.interval_max.get())
+                                 if self.interval_random.get()
+                                 else "固定 %.2f秒" % self.loop_interval.get())
+                self.status_var.set(f"动作已加载（循环{self.loop_count.get()}次，间隔{interval_text}）")
             messagebox.showinfo("成功", "动作已加载！")
         except Exception as e:
             messagebox.showerror("错误", f"加载失败: {str(e)}")
