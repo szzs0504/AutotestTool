@@ -2193,12 +2193,12 @@ class AutoTestGUI:
 
             prev_time = 0
             for j, action in enumerate(self.actions):
-            if 'time' in action:
-                current_time = action['time']
-                self._relative_delay_cache[j] = max(0.0, current_time - prev_time)
-                prev_time = current_time
-            else:
-                self._relative_delay_cache[j] = 0.0
+                if 'time' in action:
+                    current_time = action['time']
+                    self._relative_delay_cache[j] = max(0.0, current_time - prev_time)
+                    prev_time = current_time
+                else:
+                    self._relative_delay_cache[j] = 0.0
 
         self._relative_delay_valid = True
 
