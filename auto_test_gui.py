@@ -22,6 +22,40 @@ from PIL import ImageGrab
 screenshot_dir = os.path.join(os.path.dirname(__file__), 'screenshots')
 os.makedirs(screenshot_dir, exist_ok=True)
 
+# "插入动作" 对话框中的四个动作选项：(选项值, 显示文本, 说明)
+INSERT_ACTION_OPTIONS = [
+    ("left_click", "单击", "在点击位置单击左键"),
+    ("double_click", "双击", "在点击位置双击左键"),
+    ("right_click", "右键", "在点击位置单击右键"),
+    ("enter", "回车", "在点击位置单击后按下回车键"),
+]
+# 默认选中的动作选项
+INSERT_ACTION_DEFAULT = "left_click"
+
+
+def build_insert_action(option, x, y, delay):
+    """根据"插入动作"对话框中选中的选项构造动作字典
+
+    Args:
+        option: 选项值，取自 INSERT_ACTION_OPTIONS
+        x: 点击位置 X 坐标
+        y: 点击位置 Y 坐标
+        delay: 动作执行前的相对延时（秒）
+
+    Returns:
+        dict: 可直接插入动作列表的动作字典
+    """
+    if option == "double_click":
+        return {"type": "doubleclick", "x": x, "y": y, "button": "left", "delay": delay}
+    if option == "right_click":
+        return {"type": "click", "x": x, "y": y, "button": "right", "delay": delay}
+    if option == "enter":
+        # 回车：在点击位置单击（使目标获得焦点）后再按下回车键
+        return {"type": "enter", "x": x, "y": y, "delay": delay}
+    # 默认：单击左键
+    return {"type": "click", "x": x, "y": y, "button": "left", "delay": delay}
+
+
 def take_screenshot(use_timestamp=True):
     """截屏并保存到指定目录"""
     if use_timestamp:
@@ -367,7 +401,7 @@ class AutoTestGUI:
         left_buttons = ttk.Frame(bottom_frame)
         left_buttons.pack(side=tk.LEFT, padx=3)
 
-        ttk.Button(left_buttons, text="插入点击", command=self.insert_click_action).pack(side=tk.LEFT, padx=1)
+        ttk.Button(left_buttons, text="插入动作", command=self.insert_action).pack(side=tk.LEFT, padx=1)
         ttk.Button(left_buttons, text="删除动作", command=self.delete_selected).pack(side=tk.LEFT, padx=1)
         ttk.Button(left_buttons, text="插入延时", command=self.insert_random_delay).pack(side=tk.LEFT, padx=1)
         ttk.Button(left_buttons, text="添加截屏", command=self.add_screenshot_action).pack(side=tk.LEFT, padx=1)
@@ -1238,8 +1272,14 @@ class AutoTestGUI:
             pyautogui.moveTo(action['x'], action['y'], duration=0)
             pyautogui.click(button=button)
         elif action_type == 'doubleclick':
+            button = action.get('button', 'left')
             pyautogui.moveTo(action['x'], action['y'], duration=0.1)
-            pyautogui.doubleClick(x=action['x'], y=action['y'])
+            pyautogui.doubleClick(x=action['x'], y=action['y'], button=button)
+        elif action_type == 'enter':
+            # 回车：先点击目标位置使其获得焦点，再按下回车键
+            pyautogui.moveTo(action['x'], action['y'], duration=0)
+            pyautogui.click(button='left')
+            pyautogui.press('enter')
         elif action_type == 'keyboard':
             keys = [k.lower() for k in action.get('keys', [])]
             self.execute_keyboard_action(keys)
@@ -1588,8 +1628,22 @@ class AutoTestGUI:
                             self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
                         else:
                             self.update_playback_info(action_desc)
+                        button = action.get('button', 'left')
                         pyautogui.moveTo(action['x'], action['y'], duration=0.1)
-                        pyautogui.doubleClick(x=action['x'], y=action['y'])
+                        pyautogui.doubleClick(x=action['x'], y=action['y'], button=button)
+                    elif action['type'] == 'enter':
+                        delay = action.get('delay', 0)
+                        remark = action.get('remark', '')
+                        remark_info = f" {remark}" if remark else ""
+                        action_desc = f"回车 ({action['x']}, {action['y']}){remark_info}"
+                        if delay > 0:
+                            self.update_playback_info(f"等待 {delay}秒 → {action_desc}")
+                        else:
+                            self.update_playback_info(action_desc)
+                        # 先点击目标位置使其获得焦点，再按下回车键
+                        pyautogui.moveTo(action['x'], action['y'], duration=0)
+                        pyautogui.click(button='left')
+                        pyautogui.press('enter')
                     elif action['type'] == 'input':
                         delay = action.get('delay', 0)
                         remark = action.get('remark', '')
@@ -1700,9 +1754,13 @@ class AutoTestGUI:
 
                                 # 根据动作类型生成描述并执行
                                 if action_type == 'click':
-                                    desc = f"  → 单击 ({loop_action.get('x')}, {loop_action.get('y')}){remark_info}"
+                                    btn = loop_action.get('button', 'left')
+                                    desc = f"  → 单击 {btn} ({loop_action.get('x')}, {loop_action.get('y')}){remark_info}"
                                 elif action_type == 'doubleclick':
-                                    desc = f"  → 双击 ({loop_action.get('x')}, {loop_action.get('y')}){remark_info}"
+                                    btn = loop_action.get('button', 'left')
+                                    desc = f"  → 双击 {btn} ({loop_action.get('x')}, {loop_action.get('y')}){remark_info}"
+                                elif action_type == 'enter':
+                                    desc = f"  → 回车 ({loop_action.get('x')}, {loop_action.get('y')}){remark_info}"
                                 elif action_type == 'keyboard':
                                     desc = f"  → 按键 {loop_action.get('keys', [])}{remark_info}"
                                 elif action_type == 'scroll':
@@ -2330,6 +2388,8 @@ class AutoTestGUI:
         if action_type == 'click':
             button = action.get('button', '')
             return f"单击 {button} at ({action['x']}, {action['y']})"
+        if action_type == 'enter':
+            return f"回车 at ({action.get('x', 0)}, {action.get('y', 0)})"
         if action_type == 'input':
             return f"输入: {action.get('text', '')} at ({action.get('x', 0)}, {action.get('y', 0)})"
         if action_type == 'keyboard':
@@ -3491,8 +3551,8 @@ class AutoTestGUI:
         """线程安全地刷新动作列表并滚动到底部"""
         self.root.after(0, lambda: self._update_action_list(scroll_to_end=True))
     
-    def insert_click_action(self):
-        """插入点击动作"""
+    def insert_action(self):
+        """插入动作（单击 / 双击 / 右键 / 回车）"""
         self.in_dialog_operation = True
 
         # 获取当前选中项
@@ -3514,8 +3574,8 @@ class AutoTestGUI:
                     relative_delay = prev_action.get('display_delay', 0.5)
 
         dialog = tk.Toplevel(self.root)
-        dialog.title("插入点击")
-        dialog.geometry("600x200")
+        dialog.title("插入动作")
+        dialog.geometry("600x235")
         dialog.transient(self.root)
         dialog.attributes('-topmost', True)
 
@@ -3529,13 +3589,36 @@ class AutoTestGUI:
         frame = ttk.Frame(dialog, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
 
+        # 动作类型（位于"点击位置"上面一行）
+        ttk.Label(frame, text="动作类型:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+
+        option_var = tk.StringVar(value=INSERT_ACTION_DEFAULT)
+        hint_var = tk.StringVar(value="")
+
+        option_frame = ttk.Frame(frame)
+        option_frame.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+
+        option_hints = {value: hint for value, _text, hint in INSERT_ACTION_OPTIONS}
+
+        def update_hint(*_args):
+            hint_var.set(option_hints.get(option_var.get(), ""))
+
+        for value, text, _hint in INSERT_ACTION_OPTIONS:
+            ttk.Radiobutton(option_frame, text=text, value=value, variable=option_var,
+                            command=update_hint).pack(side=tk.LEFT, padx=(0, 8))
+
+        # 说明标签：随选项变化，告诉用户该选项回放时的具体行为
+        ttk.Label(frame, textvariable=hint_var, foreground="gray").grid(
+            row=1, column=0, columnspan=2, padx=5, pady=(0, 5), sticky="w")
+        update_hint()
+
         # 目标位置
-        ttk.Label(frame, text="点击位置:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        ttk.Label(frame, text="点击位置:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
         x_var = tk.StringVar(value="")
         y_var = tk.StringVar(value="")
 
         pos_frame = ttk.Frame(frame)
-        pos_frame.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        pos_frame.grid(row=2, column=1, padx=5, pady=5, sticky="w")
 
         ttk.Label(pos_frame, text="X:").pack(side=tk.LEFT)
         x_entry = ttk.Entry(pos_frame, width=8, textvariable=x_var)
@@ -3550,13 +3633,13 @@ class AutoTestGUI:
         record_btn.pack(side=tk.LEFT, padx=5)
 
         # 相对延时
-        ttk.Label(frame, text="相对延时(秒):").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        ttk.Label(frame, text="相对延时(秒):").grid(row=3, column=0, padx=5, pady=5, sticky="w")
         delay_var = tk.DoubleVar(value=round(relative_delay, 1))
-        ttk.Spinbox(frame, width=13, textvariable=delay_var, from_=0, to=999, increment=0.1, state='normal').grid(row=1, column=1, padx=5, pady=5, sticky="w")
+        ttk.Spinbox(frame, width=13, textvariable=delay_var, from_=0, to=999, increment=0.1, state='normal').grid(row=3, column=1, padx=5, pady=5, sticky="w")
 
         # 状态标签
         status_label = ttk.Label(frame, text="", foreground="blue")
-        status_label.grid(row=2, column=0, columnspan=2, pady=2)
+        status_label.grid(row=4, column=0, columnspan=2, pady=2)
 
         record_btn.config(command=lambda: self._record_position_with_dialog(dialog, x_var, y_var, status_label))
 
@@ -3572,14 +3655,8 @@ class AutoTestGUI:
                 selection = self._get_selected_indices()
                 has_loop_inner = any(isinstance(s, tuple) and s[0] == 'loop' for s in selection)
 
-                # 直接使用用户设置的延时值
-                action = {
-                    'type': 'click',
-                    'x': target_x,
-                    'y': target_y,
-                    'button': 'left',
-                    'delay': delay_var.get()
-                }
+                # 按选中的动作类型构造动作（单击 / 双击 / 右键 / 回车）
+                action = build_insert_action(option_var.get(), target_x, target_y, delay_var.get())
 
                 if has_loop_inner:
                     # 选择的是循环组内的动作 - 使用 _get_action_by_row_id 正确找到目标循环组
@@ -3628,7 +3705,7 @@ class AutoTestGUI:
             except Exception as e:
                 messagebox.showerror("错误", f"输入无效: {str(e)}")
 
-        ttk.Button(frame, text="确定", command=confirm).grid(row=3, column=0, columnspan=2, pady=3)
+        ttk.Button(frame, text="确定", command=confirm).grid(row=5, column=0, columnspan=2, pady=3)
 
     def insert_input_action(self):
         """插入输入动作"""
@@ -5635,7 +5712,7 @@ class AutoTestGUI:
                     return
                 action_type = action.get('type', '')
                 # 对于嵌套的点击/移动动作，可以编辑坐标和时间
-                if action_type in ['click', 'doubleclick', 'move']:
+                if action_type in ['click', 'doubleclick', 'move', 'enter']:
                     self._edit_nested_click_action(action, row_id)
                     return
                 elif action_type == 'variable_input':
@@ -5653,7 +5730,7 @@ class AutoTestGUI:
                 action_type = action.get('type', '')
 
             # 点击动作 - 编辑坐标
-            if action_type in ['click', 'doubleclick', 'move']:
+            if action_type in ['click', 'doubleclick', 'move', 'enter']:
                 self._edit_click_action(action, index)
             # 输入动作 - 编辑输入内容
             elif action_type == 'input':
@@ -5701,7 +5778,7 @@ class AutoTestGUI:
 
         # 动作类型
         action_type = action.get('type', 'click')
-        type_text = {"click": "点击", "doubleclick": "双击", "move": "移动"}
+        type_text = {"click": "点击", "doubleclick": "双击", "move": "移动", "enter": "回车"}
         ttk.Label(frame, text=f"动作类型: {type_text.get(action_type, action_type)}").grid(row=0, column=0, columnspan=2, pady=10)
 
         # 目标位置
@@ -6819,7 +6896,7 @@ class AutoTestGUI:
 
         # 动作类型
         action_type = action.get('type', 'click')
-        type_text = {"click": "点击", "doubleclick": "双击", "move": "移动"}
+        type_text = {"click": "点击", "doubleclick": "双击", "move": "移动", "enter": "回车"}
         ttk.Label(frame, text=f"动作类型: {type_text.get(action_type, action_type)}").grid(row=0, column=0, columnspan=2, pady=10)
 
         # 目标位置
@@ -7676,7 +7753,7 @@ class AutoTestGUI:
                 if action.get('type') == 'loop_group':
                     self._edit_nested_loop_group(action, row_id)
                     return
-                elif action.get('type') in ['click', 'doubleclick', 'move']:
+                elif action.get('type') in ['click', 'doubleclick', 'move', 'enter']:
                     self._edit_nested_click_action(action, row_id)
                     return
                 elif action.get('type') == 'variable_input':
@@ -7696,7 +7773,7 @@ class AutoTestGUI:
                 action = self.actions[index]
 
             # 检查动作是否支持时间修改
-            if action['type'] not in ['move', 'click', 'doubleclick', 'delay', 'random_delay', 'multiply_delay', 'arithmetic_delay', 'screenshot', 'loop_group', 'numeric_loop', 'variable_input']:
+            if action['type'] not in ['move', 'click', 'doubleclick', 'enter', 'delay', 'random_delay', 'multiply_delay', 'arithmetic_delay', 'screenshot', 'loop_group', 'numeric_loop', 'variable_input']:
                 messagebox.showinfo("提示", "该动作不支持修改时间")
                 self.in_dialog_operation = False
                 return
