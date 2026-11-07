@@ -4,7 +4,7 @@ import pyautogui
 import keyboard as kb  # 修改为 kb，避免与pynput.keyboard冲突
 import json
 import time
-from threading import Thread, Lock, Event
+from threading import Thread, Lock, Event, current_thread
 import os
 from pynput import mouse  # 添加鼠标监听器
 from pynput import keyboard  # 添加键盘监听器
@@ -79,6 +79,7 @@ class AutoTestGUI:
         self.in_dialog_operation = False  # 在对话框操作时不记录
         self.test_index = 0
         self.test_index_lock = Lock()  # 保护test_index的锁
+        self._playback_abort_reason = None  # 最近一次中止回放的原因
         self._variable_counter_lock = Lock()  # 保护_variable_counter
         self.mouse_listener = None
         self.keyboard_listener = None
@@ -842,25 +843,145 @@ class AutoTestGUI:
             self.stop_playback()
 
     def stop_playback(self):
-        """立即停止所有播放动作并关闭播放线程"""
-        self.is_playing = False
+        """立即停止所有播放动作并关闭播放线程
 
-        # 等待播放线程结束
+        注意：本方法可能被 keyboard 热键线程调用，因此所有 UI 操作
+        都通过 root.after(0, ...) 交回主线程执行。
+        """
+        # 原子地发出停止信号并递增播放代号：
+        # 正在运行的播放线程会因代号过期而立即失效，
+        # 即使它此刻正阻塞在延时中，醒来后也不会再执行动作，
+        # 更不会覆盖新一次回放的界面状态。
+        with self.test_index_lock:
+            self.is_playing = False
+            self.test_index += 1
+            stop_token = self.test_index
+
+        # 先复位界面状态（主线程执行），让用户立即看到"已停止"；
+        # 此处不恢复故障保护开关，等旧线程退出后再恢复。
+        self._end_playback(stop_token, "回放已停止",
+                           enable_all_buttons=True, restore_failsafe=False)
+        self.update_playback_info("回放已停止")
+
+        # 等待播放线程结束（延时已改为可中断，通常几十毫秒内返回）
         if hasattr(self, 'playback_thread') and self.playback_thread.is_alive():
             self.playback_thread.join(timeout=1.0)
 
-        # 更新UI状态
-        self.play_btn.config(state='normal')
-        self.play_btn.config(text="开始回放")
-        self.record_btn.config(state='normal')
-        self.status_var.set("回放已停止")
+        # 旧线程已退出，此时才恢复故障保护开关，
+        # 避免旧线程调用 pyautogui 时因故障保护开启而抛出异常。
+        self._restore_failsafe_if_idle()
 
-        # 启用其他按钮
-        for button in self.ui_elements:
-            if isinstance(button, ttk.Button):
-                button.config(state='normal')
+    def _is_playback_valid(self, index=None):
+        """判断回放是否仍然有效（未被停止、且未被新的回放取代）"""
+        with self.test_index_lock:
+            if not self.is_playing:
+                return False
+            if index is None:
+                return True
+            return self.test_index == index
 
-        self.update_playback_info("回放已停止")
+    def _check_failsafe_triggered(self, index=None):
+        """检测鼠标是否位于屏幕左上角（故障保护）。
+
+        命中时停止回放并返回 True。命中前会再次校验播放代号，
+        避免已失效的旧线程误杀新一次回放。
+        """
+        try:
+            current_position = pyautogui.position()
+        except Exception:
+            return False
+        if not (current_position[0] <= 10 and current_position[1] <= 10):
+            return False
+
+        with self.test_index_lock:
+            # 再次校验：此刻可能已经开始了新一次回放
+            if index is not None and self.test_index != index:
+                return False
+            if not self.is_playing:
+                return False
+            self.is_playing = False
+            self._playback_abort_reason = "回放已中止（故障保护触发）"
+        return True
+
+    def _should_abort_playback(self, index=None):
+        """综合判断是否应中止回放。
+
+        中止条件：已被停止 / 播放代号过期 / 鼠标移到屏幕左上角。
+        """
+        if not self._is_playback_valid(index):
+            return True
+        return self._check_failsafe_triggered(index)
+
+    def _abort_playback(self, index=None):
+        """中止回放并复位界面状态（由回放线程调用）"""
+        reason = getattr(self, '_playback_abort_reason', None) or "回放已中止"
+        self._end_playback(index, reason)
+
+    def _restore_failsafe_if_idle(self, worker=None):
+        """在没有回放进行时恢复 pyautogui 的故障保护开关。
+
+        恢复动作必须在锁内完成，避免与新一次回放的"关闭故障保护"交错，
+        否则新回放刚开始就被重新开启故障保护。
+
+        若播放线程仍在运行（且不是当前线程），则暂不恢复：
+        过早恢复会让仍在运行的旧线程调用 pyautogui 时抛出 FailSafeException。
+        这种情况下由播放线程自身的 finally 兜底恢复。
+
+        Args:
+            worker: 调用方所属的播放线程（可选）。播放线程在退出前
+                   调用本方法时传入自身，以便在此刻安全地恢复开关。
+        """
+        with self.test_index_lock:
+            if self.is_playing:
+                return
+            thread = worker if worker is not None else getattr(self, 'playback_thread', None)
+            if (thread is not None and thread.is_alive()
+                    and thread is not current_thread()):
+                return
+            pyautogui.FAILSAFE = True
+
+    def _end_playback(self, index=None, status_text=None, enable_all_buttons=False,
+                      restore_failsafe=True):
+        """结束一次回放的收尾工作（复位播放标志、复位UI、恢复故障保护开关）。
+
+        仅当 index 仍是当前播放代号时才真正执行，
+        避免失效的旧线程覆盖新一次回放的界面状态。
+        """
+        def _do_finalize():
+            # UI 更新在主线程执行；此处再次校验代号，
+            # 防止排队期间开始了新的回放而被覆盖
+            with self.test_index_lock:
+                if index is not None and self.test_index != index:
+                    return
+            try:
+                self.play_btn.config(state='normal', text="开始回放")
+                self.record_btn.config(state='normal')
+                if status_text:
+                    self.status_var.set(status_text)
+                if enable_all_buttons:
+                    for button in self.ui_elements:
+                        if isinstance(button, ttk.Button):
+                            button.config(state='normal')
+            except tk.TclError:
+                # 窗口可能已关闭
+                pass
+
+        # 同步复位播放标志与故障保护开关（仅当前代号）
+        # 必须在锁内完成：避免与新回放的启动/结束交错，
+        # 导致故障保护开关被错误地覆盖
+        with self.test_index_lock:
+            if index is not None and self.test_index != index:
+                # 已有更新的回放在进行，不要干扰它的状态
+                return
+            self.is_playing = False
+            if restore_failsafe:
+                pyautogui.FAILSAFE = True  # 恢复故障保护
+
+        try:
+            self.root.after(0, _do_finalize)
+        except Exception:
+            # root 已销毁
+            pass
 
     def play_actions(self):
         # 检查是否正在录制
@@ -884,13 +1005,42 @@ class AutoTestGUI:
         self._start_playback_after_recording_stop()
 
     def _start_playback_after_recording_stop(self):
-        """开始回放（录制停止后调用）"""
-        self.is_playing = True
-        self.play_btn.config(text="停止回放")
-        self.record_btn.config(state='disabled')
+        """开始回放（录制停止后调用）
+
+        注意：本方法可能由 keyboard 快捷键线程调用，UI 更新统一交回主线程。
+        """
+        self._playback_abort_reason = None
+
+        # 在锁内递增代号并置位播放标志：
+        # 必须先让旧回放代号失效，再置 is_playing，
+        # 否则旧线程可能在 is_playing=True 与代号更新之间的窗口内
+        # 误判自己仍然有效而继续执行动作。
         with self.test_index_lock:
-            self.test_index+=1
-        self.playback_thread = Thread(target=self.play_recorded_actions,args=(self.test_index,))
+            self.test_index += 1
+            index = self.test_index
+            self.is_playing = True
+            # 在锁内关闭 pyautogui 的故障保护，避免与停止流程的
+            # "恢复故障保护" 操作交错，导致新回放的故障保护被误开
+            pyautogui.FAILSAFE = False
+
+        def _apply_start_ui():
+            # 若本次回放在排队期间已被停止或取代，则不要覆盖其界面状态
+            with self.test_index_lock:
+                if self.test_index != index:
+                    return
+            try:
+                self.play_btn.config(text="停止回放")
+                self.record_btn.config(state='disabled')
+            except tk.TclError:
+                pass
+
+        try:
+            self.root.after(0, _apply_start_ui)
+        except Exception:
+            # root 已销毁
+            pass
+
+        self.playback_thread = Thread(target=self.play_recorded_actions, args=(index,))
         self.playback_thread.start()
 
     def toggle_recording(self):
@@ -1066,14 +1216,19 @@ class AutoTestGUI:
         finally:
             pyautogui.FAILSAFE = True  # 恢复故障保护
 
-    def _execute_single_action(self, action, loop_index=0):
+    def _execute_single_action(self, action, loop_index=0, index=None):
         """执行单个动作（用于循环组）
 
         Args:
             action: 动作字典
             loop_index: 当前循环组的循环索引（从0开始），用于输入等动作
+            index: 当前播放代号，用于检测中止（可选）
         """
         if not action:
+            return
+
+        # 中止检查：停止信号 / 播放代号过期 / 鼠标左上角故障保护
+        if self._should_abort_playback(index):
             return
 
         action_type = action.get('type')
@@ -1100,20 +1255,24 @@ class AutoTestGUI:
                 delay=action.get('delay', 0),
                 directory=action.get('directory'),
                 filename=action.get('filename'),
-                naming=action.get('naming')
+                naming=action.get('naming'),
+                index=index
             )
         elif action_type == 'random_delay':
             delay = random.uniform(action.get('min_delay', 0), action.get('max_delay', 0))
-            time.sleep(delay)
+            if not self._safe_sleep_with_failsafe(delay, index):
+                return
         elif action_type == 'multiply_delay':
             # 倍数延时：使用基数 * (loop_index + 1)
             base_delay = action.get('base_delay', 1.0)
             delay = base_delay * (loop_index + 1)
-            time.sleep(delay)
+            if not self._safe_sleep_with_failsafe(delay, index):
+                return
         elif action_type == 'arithmetic_delay':
             # 等差延时：这里在循环组内使用起始延时
             delay = action.get('start_delay', 0.5)
-            time.sleep(delay)
+            if not self._safe_sleep_with_failsafe(delay, index):
+                return
         elif action_type == 'delay':
             # 延时动作 - 延时由调用方处理，这里只更新显示
             delay_mode = action.get('delay_mode', 'fixed')
@@ -1134,13 +1293,13 @@ class AutoTestGUI:
                 return
 
             for nested_loop_index in range(nested_loop_count):
-                if not self.is_playing:
+                if self._should_abort_playback(index):
                     return
                 # 执行嵌套循环动作
                 for nested_action in nested_loop_actions:
-                    if not self.is_playing:
+                    if self._should_abort_playback(index):
                         return
-                    self._execute_single_action(nested_action, nested_loop_index)
+                    self._execute_single_action(nested_action, nested_loop_index, index)
 
                 # 嵌套循环间隔
                 if nested_loop_index < nested_loop_count - 1:
@@ -1154,7 +1313,8 @@ class AutoTestGUI:
                     else:  # random
                         wait_time = random.uniform(interval_params.get('min', 0), interval_params.get('max', 0))
                     if wait_time > 0:
-                        self._safe_sleep_with_failsafe(wait_time)
+                        if not self._safe_sleep_with_failsafe(wait_time, index):
+                            return
         elif action_type == 'variable_input':
             # 变量输入 - 延时由调用方处理
             target_x = action.get('x')
@@ -1273,7 +1433,7 @@ class AutoTestGUI:
                 values = action.get('text_list', [])
 
             for i, value in enumerate(values):
-                if not self.is_playing:
+                if self._should_abort_playback(index):
                     return
 
                 # 点击目标位置
@@ -1295,9 +1455,9 @@ class AutoTestGUI:
 
                 # 执行循环内动作
                 for act in loop_actions:
-                    if not self.is_playing:
+                    if self._should_abort_playback(index):
                         return
-                    self._execute_single_action(act)
+                    self._execute_single_action(act, 0, index)
 
                 # 计算实际间隔
                 if i < len(values) - 1:
@@ -1320,16 +1480,27 @@ class AutoTestGUI:
                         min_val = loop_interval.get('min', 0.5) if isinstance(loop_interval, dict) else 0.5
                         max_val = loop_interval.get('max', 2.0) if isinstance(loop_interval, dict) else 2.0
                         actual_interval = random.uniform(min_val, max_val)
-                    self._safe_sleep_with_failsafe(actual_interval)
+                    if not self._safe_sleep_with_failsafe(actual_interval, index):
+                        return
 
     def play_recorded_actions(self, index):
-        # 禁用 pyautogui 的故障保护
-        pyautogui.FAILSAFE = False
+        # 本次回放的故障保护已在启动时（_start_playback_after_recording_stop）
+        # 于锁内关闭，此处不再重复设置，避免与停止流程交错
+        if not self._is_playback_valid(index):
+            # 已被停止或已被新回放取代：这里不做任何 UI 收尾，
+            # 避免把新一次回放的故障保护开关改回去；
+            # 但仍需在当前没有回放进行时把故障保护开关恢复回来，
+            # 否则开关会永久停留在关闭状态。
+            self._restore_failsafe_if_idle(worker=current_thread())
+            return
 
         # 清空回放信息列表（使用root.after确保线程安全）
         self.root.after(0, lambda: self.playback_list.delete("1.0", tk.END))
         self.root.after(0, lambda: self.status_var.set("正在执行..."))
         if not self.actions:
+            # 没有动作可执行：立即复位界面，避免按钮卡在"停止回放"
+            self._end_playback(index, "没有可回放的动作")
+            self._restore_failsafe_if_idle(worker=current_thread())
             return
 
         try:
@@ -1339,7 +1510,10 @@ class AutoTestGUI:
                 win32gui.SetForegroundWindow(hwnd)
             except Exception as e:
                 print(f"窗口切换失败: {e}")
-            time.sleep(0.5)
+            # 切换窗口后的等待同样可被 Esc / 故障保护打断
+            if not self._safe_sleep_with_failsafe(0.5, index):
+                self._abort_playback(index)
+                return
 
             loops = max(1, self.loop_count.get())
             if self.interval_random.get():
@@ -1352,9 +1526,9 @@ class AutoTestGUI:
                 interval = max(0, self.loop_interval.get())
 
             for loop in range(loops):
-                if not self.is_playing:
-                    self.root.after(0, lambda: self.status_var.set("回放已中止"))
-                    break
+                if self._should_abort_playback(index):
+                    self._abort_playback(index)
+                    return
 
                 self.update_playback_info(f"开始执行第 {loop + 1}/{loops} 轮")
 
@@ -1363,24 +1537,9 @@ class AutoTestGUI:
                     actions_snapshot = list(self.actions)
 
                 for i, action in enumerate(actions_snapshot):
-                    # 检查是否按下Ctrl+Q（兼容性处理，防止遗漏）
-                    if not self.is_playing:
-                        self.play_btn.config(state='normal', text="开始回放")
-                        self.record_btn.config(state='normal')
-                        return
-                    with self.test_index_lock:
-                        if self.test_index != index:
-                            self.play_btn.config(state='normal', text="开始回放")
-                            self.record_btn.config(state='normal')
-                            return
-                    # 检查鼠标是否在屏幕左上角
-                    current_position = pyautogui.position()
-                    if current_position[0] <= 10 and current_position[1] <= 10:
-                        pyautogui.FAILSAFE = True
-                        self.is_playing = False
-                        self.play_btn.config(state='normal', text="开始回放")
-                        self.record_btn.config(state='normal')
-                        self.root.after(0, lambda: self.status_var.set("回放已中止（FAILSAFE触发）"))
+                    # 统一的中止检查：停止信号 / 播放代号过期 / 鼠标左上角故障保护
+                    if self._should_abort_playback(index):
+                        self._abort_playback(index)
                         return
 
                     # 计算需要等待的时间（直接使用 delay 字段）
@@ -1390,9 +1549,8 @@ class AutoTestGUI:
                         wait_time = action.get('delay', 0)
                         if wait_time > 0:
                             if not self._safe_sleep_with_failsafe(wait_time, index):
-                                # 被故障保护中断
-                                self.play_btn.config(state='normal', text="开始回放")
-                                self.record_btn.config(state='normal')
+                                # 被中止
+                                self._abort_playback(index)
                                 return
 
                     if action['type'] == 'move':
@@ -1475,32 +1633,41 @@ class AutoTestGUI:
                     elif action['type'] == 'random_delay':
                         delay = random.uniform(action['min_delay'], action['max_delay'])
                         self.update_playback_info(f"等待随机延时: {delay:.1f}秒")
-                        time.sleep(delay)
+                        if not self._safe_sleep_with_failsafe(delay, index):
+                            self._abort_playback(index)
+                            return
                     elif action['type'] == 'multiply_delay':
                         # 计算倍数延时: base * (loop_index + 1)
                         base_delay = action.get('base_delay', 1.0)
                         delay = base_delay * (loop + 1)
                         self.update_playback_info(f"等待倍数延时(第{loop+1}轮): {delay:.1f}秒")
-                        time.sleep(delay)
+                        if not self._safe_sleep_with_failsafe(delay, index):
+                            self._abort_playback(index)
+                            return
                     elif action['type'] == 'arithmetic_delay':
                         # 计算等差延时: start + step * loop_index
                         start_delay = action.get('start_delay', 0.5)
                         step_delay = action.get('step_delay', 0.1)
                         delay = start_delay + step_delay * loop
                         self.update_playback_info(f"等待等差延时(第{loop+1}轮): {delay:.1f}秒")
-                        time.sleep(delay)
+                        if not self._safe_sleep_with_failsafe(delay, index):
+                            self._abort_playback(index)
+                            return
                     elif action['type'] == 'delay':
                         # 固定延时
                         delay = action.get('delay', 0)
                         if delay > 0:
                             self.update_playback_info(f"等待固定延时: {delay:.1f}秒")
-                            time.sleep(delay)
+                            if not self._safe_sleep_with_failsafe(delay, index):
+                                self._abort_playback(index)
+                                return
                     elif action['type'] == 'screenshot':
                         self.take_screenshot(
                             delay=action.get('delay', 0),
                             directory=action.get('directory'),
                             filename=action.get('filename'),
-                            naming=action.get('naming')
+                            naming=action.get('naming'),
+                            index=index
                         )
                     elif action['type'] == 'loop_group':
                         # 循环组：执行选中动作N次
@@ -1516,12 +1683,15 @@ class AutoTestGUI:
                             continue
 
                         for loop_idx in range(loop_count):
-                            if not self.is_playing:
+                            # 统一的中止检查：停止信号 / 播放代号过期 / 鼠标左上角故障保护
+                            if self._should_abort_playback(index):
+                                self._abort_playback(index)
                                 return
                             self.update_playback_info(f"循环组 第{loop_idx+1}/{loop_count}轮")
                             # 执行循环动作
                             for loop_action in loop_actions:
-                                if not self.is_playing:
+                                if self._should_abort_playback(index):
+                                    self._abort_playback(index)
                                     return
                                 action_type = loop_action.get('type', '')
                                 action_delay = loop_action.get('delay', 0)
@@ -1548,10 +1718,13 @@ class AutoTestGUI:
 
                                 if action_delay > 0:
                                     self.update_playback_info(f"  等待 {action_delay}秒 → {desc}")
-                                    time.sleep(action_delay)
+                                    # 使用可中断的等待，Esc / 故障保护可立即生效
+                                    if not self._safe_sleep_with_failsafe(action_delay, index):
+                                        self._abort_playback(index)
+                                        return
                                 else:
                                     self.update_playback_info(desc)
-                                self._execute_single_action(loop_action, loop_idx)
+                                self._execute_single_action(loop_action, loop_idx, index)
 
                             # 循环间隔
                             if loop_idx < loop_count - 1:
@@ -1566,15 +1739,14 @@ class AutoTestGUI:
                                     wait_time = random.uniform(interval_params.get('min', 0), interval_params.get('max', 0))
                                 if wait_time > 0:
                                     if not self._safe_sleep_with_failsafe(wait_time, index):
-                                        # 被故障保护中断，停止播放
-                                        self.play_btn.config(state='normal', text="开始回放")
-                                        self.record_btn.config(state='normal')
+                                        # 被中止
+                                        self._abort_playback(index)
                                         return
 
                         self.update_playback_info(f"循环组完成: 共执行{loop_count}次")
                     elif action['type'] == 'input_loop':
                         # 输入循环：执行输入并执行循环内动作
-                        self._execute_single_action(action)
+                        self._execute_single_action(action, 0, index)
                         self.update_playback_info(f"输入循环完成")
                     elif action['type'] == 'numeric_loop':
                         # 数值循环：通过{n}和步距执行输入动作
@@ -1591,7 +1763,8 @@ class AutoTestGUI:
                             continue
 
                         for i in range(count):
-                            if not self.is_playing:
+                            if self._should_abort_playback(index):
+                                self._abort_playback(index)
                                 return
 
                             # 计算当前数值：起始值 + 步距 * 索引
@@ -1608,7 +1781,9 @@ class AutoTestGUI:
 
                             # 等待间隔
                             if interval > 0:
-                                time.sleep(interval)
+                                if not self._safe_sleep_with_failsafe(interval, index):
+                                    self._abort_playback(index)
+                                    return
 
                         self.update_playback_info(f"数值循环完成: 共{count}次")
                     elif action['type'] == 'variable_input':
@@ -1718,25 +1893,29 @@ class AutoTestGUI:
                         wait_time = interval
                         self.update_playback_info(f"等待 {interval} 秒后开始下一轮...")
                     if not self._safe_sleep_with_failsafe(wait_time, index):
-                        # 被故障保护中断
-                        self.play_btn.config(state='normal', text="开始回放")
-                        self.record_btn.config(state='normal')
+                        # 被中止
+                        self._abort_playback(index)
                         return
 
-            self.is_playing = False
-            self.play_btn.config(state='normal', text="开始回放")
-            self.record_btn.config(state='normal')
-            if self.status_var.get() != "回放已中止":
-                self.status_var.set("执行完成")
+            # 正常结束：复位UI并恢复故障保护
+            self._end_playback(index, "执行完成")
             self.update_playback_info("播放完成")
-            pyautogui.FAILSAFE = True  # 恢复故障保护
 
         except Exception as e:
             print(f"回放错误: {e}")
-            self.root.after(0, lambda: self.status_var.set("回放出错"))
-            pyautogui.FAILSAFE = True  # 恢复故障保护
+            # 出错时同样要复位按钮与播放标志，否则界面会卡在"停止回放"
+            self._end_playback(index, "回放出错")
+            self.update_playback_info(f"回放出错: {e}")
             return
-    
+
+        finally:
+            # 兜底恢复故障保护开关：
+            # 播放线程退出时，若当前没有回放在进行就把开关恢复为开启。
+            # 正常结束/出错时 _end_playback 已经恢复过，此处是幂等的；
+            # 被 Esc 停止时 _end_playback 因代号过期而直接返回，
+            # 由本处保证开关最终被恢复，不会永久停留在关闭状态。
+            self._restore_failsafe_if_idle(worker=current_thread())
+
     def update_playback_info(self, text):
         """更新回放信息列表（线程安全）"""
         # 使用root.after确保在主线程中执行UI操作
@@ -1753,16 +1932,21 @@ class AutoTestGUI:
             pass
 
     def _safe_sleep_with_failsafe(self, duration, index=None):
-        """带故障保护检查的睡眠方法
+        """带中止检查的睡眠方法
+
+        每 0.05 秒检查一次是否需要中止（Esc 停止 / 播放代号过期 /
+        鼠标移到屏幕左上角），因此阻塞等待可以被立即打断。
 
         Args:
             duration: 需要睡眠的总时长（秒）
-            index: 当前测试索引，用于检查是否过期（可选）
+            index: 当前播放代号，用于检查是否过期（可选）
 
         Returns:
             True: 睡眠正常完成
-            False: 被故障保护中断
+            False: 被中止
         """
+        if duration <= 0:
+            return not self._should_abort_playback(index)
         check_interval = 0.05  # 每0.05秒检查一次
         elapsed = 0.0
         while elapsed < duration:
@@ -1771,26 +1955,9 @@ class AutoTestGUI:
             time.sleep(sleep_time)
             elapsed += sleep_time
 
-            # 检查是否已停止
-            if not self.is_playing:
+            # 统一的中止判定（停止信号 / 代号过期 / 左上角故障保护）
+            if self._should_abort_playback(index):
                 return False
-
-            # 检查测试索引是否过期（仅当提供了index参数时）
-            if index is not None:
-                with self.test_index_lock:
-                    if self.test_index != index:
-                        return False
-
-            # 检查鼠标是否在屏幕左上角（故障保护）
-            try:
-                current_position = pyautogui.position()
-                if current_position[0] <= 10 and current_position[1] <= 10:
-                    pyautogui.FAILSAFE = True
-                    self.is_playing = False
-                    self.root.after(0, lambda: self.status_var.set("回放已中止（故障保护触发）"))
-                    return False
-            except Exception:
-                pass
 
         return True
 
@@ -7903,9 +8070,12 @@ class AutoTestGUI:
         ttk.Button(btn_frame, text="确定", command=confirm_screenshot).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
 
-    def take_screenshot(self, delay=0, directory=None, filename=None, naming=None):
+    def take_screenshot(self, delay=0, directory=None, filename=None, naming=None, index=None):
         """截屏并保存到指定目录，支持延时和命名方式选择"""
-        time.sleep(delay)  # 添加延时
+        # 延时使用可中断等待，Esc / 故障保护可立即生效
+        if delay > 0:
+            if not self._safe_sleep_with_failsafe(delay, index):
+                return
         # 使用传入的参数或全局设置
         directory = directory if directory else self.screenshot_dir_var.get()
         filename = filename if filename else self.screenshot_name_var.get()
