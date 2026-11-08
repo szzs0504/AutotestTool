@@ -105,6 +105,11 @@ def find_entries(dialog):
             if isinstance(w, ttk.Entry) and not isinstance(w, ttk.Spinbox)]
 
 
+def find_spinboxes(dialog):
+    """返回数值输入框（Spinbox）"""
+    return [w for w in walk_widgets(dialog) if isinstance(w, ttk.Spinbox)]
+
+
 def radio_value(radio):
     """读取单选按钮当前绑定的变量值（ttk 不暴露 .variable 属性）"""
     var_name = radio.cget("variable")
@@ -188,12 +193,45 @@ def test_dialog_inserts_action_matching_selection():
             assert action["x"] == 123 and action["y"] == 456, f"{label}: 坐标不对 {action}"
             if "button" in expect:
                 assert action["button"] == expect["button"], f"{label}: 鼠标键不对 {action}"
+            # 插入的动作必须记录相对延时，供下一次插入时作为默认值
+            assert action["display_delay"] == action["delay"], f"{label}: display_delay 不对 {action}"
 
             dialog.destroy()
             app.in_dialog_operation = False
     finally:
         app.destroy()
     print("[OK] 四个选项分别插入对应的动作（类型/坐标/鼠标键均正确）")
+
+
+def test_nested_click_edit_updates_delay():
+    """循环组内编辑插入的动作时，延时必须真正写回动作（否则编辑结果丢失）"""
+    app = DialogFake()
+    try:
+        nested = {"type": "enter", "x": 10, "y": 20, "delay": 1.5, "display_delay": 1.5}
+        app.actions = [{
+            "type": "loop_group",
+            "loop_count": 3,
+            "loop_actions": [nested],
+        }]
+
+        app._edit_nested_click_action(nested, "loop_0_0")
+        app.root.update()
+        dialog = find_dialog(app.root)
+        assert dialog is not None, "未找到编辑对话框"
+
+        spins = find_spinboxes(dialog)
+        assert len(spins) == 1, f"期望一个延时输入框，实际 {len(spins)}"
+        assert float(spins[0].get()) == 1.5, f"延时初值不对: {spins[0].get()}"
+
+        spins[0].set(2.5)
+        app.root.update()
+        find_button(dialog, "确定").invoke()
+        app.root.update()
+
+        assert nested["delay"] == 2.5, f"延时未写回动作: {nested}"
+        print("[OK] 循环组内编辑动作时延时正确写回")
+    finally:
+        app.destroy()
 
 
 # --------------------------------------------------------------------------

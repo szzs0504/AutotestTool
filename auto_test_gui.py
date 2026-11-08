@@ -3013,8 +3013,8 @@ class AutoTestGUI:
         elif column == "#3":
             # 点击备注列：编辑备注
             self._edit_remark(row_id)
-        elif action_type in ['click', 'doubleclick', 'move', 'variable_input', 'input', 'traverse_input']:
-            # 点击/双击/移动/变量输入/输入动作 - 编辑坐标和内容
+        elif action_type in ['click', 'doubleclick', 'move', 'enter', 'variable_input', 'input', 'traverse_input']:
+            # 点击/双击/移动/回车/变量输入/输入动作 - 编辑坐标和内容
             self._hide_delay_spinbox()
             self.edit_action(event)
         else:
@@ -3315,7 +3315,7 @@ class AutoTestGUI:
             current_value = float(action.get('interval', 0.5))
         elif action_type == 'variable_input':
             current_value = float(action.get('delay', 0.0))
-        elif action_type in ['move', 'click', 'doubleclick', 'input', 'traverse_input', 'keyboard', 'scroll']:
+        elif action_type in ['move', 'click', 'doubleclick', 'enter', 'input', 'traverse_input', 'keyboard', 'scroll']:
             # 直接使用 delay 字段
             current_value = float(action.get('delay', 0.0))
         else:
@@ -3449,7 +3449,7 @@ class AutoTestGUI:
                 action['interval'] = new_value
             elif action_type == 'variable_input':
                 action['delay'] = new_value
-            elif action_type in ['move', 'click', 'doubleclick', 'input', 'traverse_input', 'keyboard', 'scroll']:
+            elif action_type in ['move', 'click', 'doubleclick', 'enter', 'input', 'traverse_input', 'keyboard', 'scroll']:
                 # 直接更新 delay 字段
                 action['delay'] = new_value
             else:
@@ -3657,6 +3657,8 @@ class AutoTestGUI:
 
                 # 按选中的动作类型构造动作（单击 / 双击 / 右键 / 回车）
                 action = build_insert_action(option_var.get(), target_x, target_y, delay_var.get())
+                # 记录相对延时：供下一次插入时作为默认延时，循环组内编辑时也能正确显示
+                action['display_delay'] = delay_var.get()
 
                 if has_loop_inner:
                     # 选择的是循环组内的动作 - 使用 _get_action_by_row_id 正确找到目标循环组
@@ -3671,8 +3673,10 @@ class AutoTestGUI:
                             # 在末尾插入新动作
                             loop_actions.append(action)
                             # 获取父级循环组的 row_id 用于 select_index
-                            parent_row_id = '_'.join(row_id.split('_')[:-2]) if 'action_' in row_id else row_id
+                            # 实际 iid 形如 loop_0 / loop_0_1 / input_loop_0，去掉最后一段即父级
+                            parent_row_id = '_'.join(row_id.split('_')[:-1])
                             self._update_action_list(select_index=parent_row_id)
+                            self._sync_parent_loop_count(parent_row_id)
                         else:
                             # 回退：使用原来的逻辑
                             for s in selection:
@@ -3700,6 +3704,8 @@ class AutoTestGUI:
                     self.actions.insert(insert_pos, action)
                     self._update_action_list(select_index=insert_pos)
 
+                # 动作位置发生变化，延时缓存失效
+                self._invalidate_relative_delay_cache()
                 self.in_dialog_operation = False
                 dialog.destroy()
             except Exception as e:
@@ -5003,7 +5009,7 @@ class AutoTestGUI:
                 return
 
             # 只有有坐标的动作才能重新录制
-            if action_type not in ['click', 'doubleclick', 'move', 'scroll']:
+            if action_type not in ['click', 'doubleclick', 'enter', 'move', 'scroll']:
                 return
 
             # 隐藏所有编辑器
@@ -6992,6 +6998,8 @@ class AutoTestGUI:
                 # 更新动作
                 action['x'] = target_x
                 action['y'] = target_y
+                # 回放时实际等待的是 delay 字段，必须同步更新
+                action['delay'] = delay_var.get()
                 # 计算新的绝对时间：prev_time + 相对延时
                 parts = row_id.split('_')
                 if len(parts) >= 3:

@@ -162,7 +162,26 @@ def run():
     assert len(warns) == 1, warns
     print("[OK] 空动作列表保存时给出警告")
 
-    for a in (app, app2, app3, app4, app5, app6):
+    # ---- 7) "回车"等新动作类型必须能原样保存并加载回来 ----
+    app7 = Fake()
+    app7.actions = [
+        {"type": "enter", "x": 300, "y": 400, "delay": 1.5, "display_delay": 1.5},
+        {"type": "click", "x": 1, "y": 2, "button": "right", "delay": 0.3},
+    ]
+    enter_file = os.path.join(tmp, "enter.json")
+    patch_dialogs(enter_file)
+    app7.save_actions()
+    app8 = Fake()
+    patch_dialogs(enter_file)
+    errs = collect_errors()
+    app8.load_actions()
+    assert not errs, errs
+    assert app8.actions == app7.actions, f"回车动作往返不一致: {app8.actions}"
+    assert app8.actions[0]["type"] == "enter"
+    assert app8.actions[0]["x"] == 300 and app8.actions[0]["y"] == 400
+    print("[OK] 回车动作保存后能原样加载回来")
+
+    for a in (app, app2, app3, app4, app5, app6, app7, app8):
         a.destroy()
     print("\n全部通过")
 
