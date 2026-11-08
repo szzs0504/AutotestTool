@@ -50,12 +50,37 @@ def test_build_insert_action_mapping():
 # --------------------------------------------------------------------------
 # 对话框测试（使用真实 Tk）
 # --------------------------------------------------------------------------
+# 整个测试文件共用一个 Tk 根窗口：
+# 反复创建/销毁 Tk 解释器会重新读取 init.tcl，在 Windows 上偶发
+# "Can't find a usable init.tcl" 失败（与被测代码无关）。
+_SHARED_ROOT = None
+
+
+def get_shared_root():
+    """获取（并缓存）共用的 Tk 根窗口"""
+    global _SHARED_ROOT
+    if _SHARED_ROOT is None:
+        _SHARED_ROOT = tk.Tk()
+        _SHARED_ROOT.withdraw()
+    return _SHARED_ROOT
+
+
+def destroy_shared_root():
+    """释放共用的 Tk 根窗口（测试结束后调用）"""
+    global _SHARED_ROOT
+    if _SHARED_ROOT is not None:
+        try:
+            _SHARED_ROOT.destroy()
+        except tk.TclError:
+            pass
+        _SHARED_ROOT = None
+
+
 class DialogFake(ag.AutoTestGUI):
     """只构造"插入动作"对话框所需的字段"""
 
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.withdraw()
+        self.root = get_shared_root()
         self.actions_lock = Lock()
         self.actions = []
         self.in_dialog_operation = False
@@ -66,10 +91,9 @@ class DialogFake(ag.AutoTestGUI):
         """跳过动作树刷新（避免依赖大量 UI 状态）"""
 
     def destroy(self):
-        try:
-            self.root.destroy()
-        except tk.TclError:
-            pass
+        """共用根窗口由 destroy_shared_root() 统一释放，这里只清理自身状态"""
+        self.actions = []
+        self.in_dialog_operation = False
 
 
 def walk_widgets(parent):
@@ -406,6 +430,8 @@ def run():
     test_right_click_and_doubleclick_playback()
     test_dialog_has_four_options_default_single_click()
     test_dialog_inserts_action_matching_selection()
+    test_nested_click_edit_updates_delay()
+    destroy_shared_root()
     print("\n全部通过")
 
 

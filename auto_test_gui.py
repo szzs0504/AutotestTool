@@ -32,6 +32,9 @@ INSERT_ACTION_OPTIONS = [
 # 默认选中的动作选项
 INSERT_ACTION_DEFAULT = "left_click"
 
+# Esc 键的虚拟键码（VK_ESCAPE），用于直接查询物理按键状态
+VK_ESCAPE = 0x1B
+
 
 def build_insert_action(option, x, y, delay):
     """根据"插入动作"对话框中选中的选项构造动作字典
@@ -937,14 +940,32 @@ class AutoTestGUI:
             self._playback_abort_reason = "回放已中止（故障保护触发）"
         return True
 
+    def _is_escape_pressed(self):
+        """检测 Esc 键当前是否处于按下状态
+
+        直接查询系统物理按键状态，不依赖 keyboard 库：
+        keyboard 的全局钩子可能因异常或被占用而失效，
+        此时仍能可靠地中止回放。
+        """
+        try:
+            return bool(ctypes.windll.user32.GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+        except Exception:
+            return False
+
     def _should_abort_playback(self, index=None):
         """综合判断是否应中止回放。
 
-        中止条件：已被停止 / 播放代号过期 / 鼠标移到屏幕左上角。
+        中止条件：已被停止 / 播放代号过期 / 鼠标移到屏幕左上角 / Esc 键被按下。
         """
         if not self._is_playback_valid(index):
             return True
-        return self._check_failsafe_triggered(index)
+        if self._check_failsafe_triggered(index):
+            return True
+        # Esc 键：与全局钩子互为备份，任何一条路径生效都能停止回放
+        if self._is_escape_pressed():
+            self._playback_abort_reason = "回放已中止（按 Esc 停止）"
+            return True
+        return False
 
     def _abort_playback(self, index=None):
         """中止回放并复位界面状态（由回放线程调用）"""
@@ -8198,6 +8219,15 @@ class AutoTestGUI:
         except Exception:
             pass
 
+        # 清理 Esc 的原始事件钩子（unhook_all_hotkeys 只清理热键）
+        remove_esc_hook = getattr(self, '_esc_hook_remove', None)
+        if remove_esc_hook:
+            try:
+                remove_esc_hook()
+            except Exception:
+                pass
+            self._esc_hook_remove = None
+
         # 清理监听器
         if self.mouse_listener:
             try:
@@ -8226,9 +8256,30 @@ class AutoTestGUI:
         try:
             kb.add_hotkey('ctrl+shift+l', self.toggle_recording)
             kb.add_hotkey('ctrl+shift+p', self.play_actions)
-            kb.add_hotkey('esc', self.stop_by_esc)
         except Exception as e:
             print(f"快捷键注册失败: {e}")
+
+        # Esc 不能用 kb.add_hotkey('esc', ...) 监听：
+        # keyboard 的单键热键只有在"当前按下的按键集合恰好只有该键"时才会触发，
+        # 只要同时按住 Shift / Ctrl / Alt 等任意其它按键，热键就会被静默丢弃
+        # （实测 Shift+Esc、Ctrl+Esc 均不触发，回放因此停不下来）。
+        # 这里改用原始事件钩子逐个按键事件判断，不受其它按键影响。
+        try:
+            self._esc_hook_remove = kb.hook(self._on_global_key_event)
+        except Exception as e:
+            print(f"Esc 监听注册失败，回退到热键方式: {e}")
+            try:
+                kb.add_hotkey('esc', self.stop_by_esc)
+            except Exception as e2:
+                print(f"Esc 快捷键注册失败: {e2}")
+
+    def _on_global_key_event(self, event):
+        """全局按键事件回调：识别 Esc 键（按下时触发停止）"""
+        try:
+            if getattr(event, 'event_type', None) == kb.KEY_DOWN and event.name == 'esc':
+                self.stop_by_esc()
+        except Exception as e:
+            print(f"处理全局按键事件出错: {e}")
 
 if __name__ == "__main__":
     app = AutoTestGUI()
